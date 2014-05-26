@@ -26,11 +26,8 @@ import tachyon.client.{WriteType, ReadType}
 
 import org.apache.spark.Logging
 import org.apache.spark.util.Utils
-import org.apache.spark.serializer.Serializer
-
 
 private class Entry(val size: Long)
-
 
 /**
  * Stores BlockManager blocks on Tachyon.
@@ -47,33 +44,6 @@ private class TachyonStore(
   }
 
   override def putBytes(blockId: BlockId, bytes: ByteBuffer, level: StorageLevel): PutResult =  {
-    putToTachyonStore(blockId, bytes, true)
-  }
-
-  override def putValues(
-      blockId: BlockId,
-      values: ArrayBuffer[Any],
-      level: StorageLevel,
-      returnValues: Boolean): PutResult = {
-    return putValues(blockId, values.toIterator, level, returnValues)
-  }
-
-  override def putValues(
-      blockId: BlockId,
-      values: Iterator[Any],
-      level: StorageLevel,
-      returnValues: Boolean): PutResult = {
-    logDebug("Attempting to write values for block " + blockId)
-    val _bytes = blockManager.dataSerialize(blockId, values)
-    putToTachyonStore(blockId, _bytes, returnValues)
-  }
-
-  private def putToTachyonStore(
-      blockId: BlockId,
-      bytes: ByteBuffer,
-      returnValues: Boolean): PutResult = {
-    // So that we do not modify the input offsets !
-    // duplicate does not copy buffer, so inexpensive
     val byteBuffer = bytes.duplicate()
     byteBuffer.rewind()
     logDebug("Attempting to put block " + blockId + " into Tachyon")
@@ -86,10 +56,41 @@ private class TachyonStore(
     logDebug("Block %s stored as %s file in Tachyon in %d ms".format(
       blockId, Utils.bytesToString(byteBuffer.limit), (finishTime - startTime)))
 
+    PutResult(bytes.limit(), Right(bytes.duplicate()))
+  }
+
+  override def putValues(
+      blockId: BlockId,
+      values: ArrayBuffer[Any],
+      level: StorageLevel,
+      returnValues: Boolean): PutResult = {
+    logInfo("Test log: Attempting to write array buffers to tachyon")
+    return putValues(blockId, values.toIterator, level, returnValues)
+  }
+
+  override def putValues(
+      blockId: BlockId,
+      values: Iterator[Any],
+      level: StorageLevel,
+      returnValues: Boolean): PutResult = {
+    logInfo("Test log: Attempting to write iterators to tachyon")
+
+    logDebug("Attempting to write values for block " + blockId)
+    val startTime = System.currentTimeMillis
+    val file = tachyonManager.getFile(blockId)
+    val os = file.getOutStream(WriteType.TRY_CACHE)
+    blockManager.dataSerializeStream(blockId, os, values)
+    val length = file.length()
+
+    val finishTime = System.currentTimeMillis
+    logDebug("Block %s stored as %s file in Tachyon in %d ms".format(
+      blockId, Utils.bytesToString(length), (finishTime - startTime)))
+
     if (returnValues) {
-      PutResult(bytes.limit(), Right(bytes.duplicate()))
+      val buffer = getBytes(blockId).get
+      PutResult(length, Right(buffer))
     } else {
-      PutResult(bytes.limit(), null)
+      PutResult(length, null)
     }
   }
 

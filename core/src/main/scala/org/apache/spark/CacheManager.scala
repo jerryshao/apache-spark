@@ -84,8 +84,8 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
           // Keep track of blocks with updated statuses
           var updatedBlocks = Seq[(BlockId, BlockStatus)]()
           val returnValue: Iterator[T] = {
-            if (storageLevel.useDisk && !storageLevel.useMemory) {
-              /* In the case that this RDD is to be persisted using DISK_ONLY
+            if (storageLevel.useDisk && !storageLevel.useMemory || storageLevel.useOffHeap) {
+              /* In the case that this RDD is to be persisted using DISK_ONLY or OFF_HEAP
                * the iterator will be passed directly to the blockManager (rather then
                * caching it to an ArrayBuffer first), then the resulting block data iterator
                * will be passed back to the user. If the iterator generates a lot of data,
