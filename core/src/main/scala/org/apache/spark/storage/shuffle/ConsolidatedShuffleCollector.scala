@@ -32,74 +32,100 @@ import org.apache.spark.util.collection.{PrimitiveVector, PrimitiveKeyOpenHashMa
 
 private[spark]
 class ConsolidatedShuffleCollector(blockManager: BlockManager)
-  extends BlockShuffleCollector(blockManager) with Logging {
+  extends BlockStoreShuffleCollector(blockManager) with Logging {
   import ConsolidatedShuffleCollector._
 
-  private var shuffleState: ShuffleState = _
-  private var fileGroup: ShuffleFileGroup = _
-  private var shuffleWriteGroup: Array[BlockObjectWriter] = _
+  private val shuffleStates = new TimeStampedHashMap[ShuffleId, ShuffleState]()
 
-  override def init(context: TaskContext, dep: ShuffleDependency[_, _]) {
-    super.init(context, dep)
+  def createCollector(): Collector = new ConsolidatedBlockCollector()
 
-    shuffleStates.putIfAbsent(shuffleId, new ShuffleState(numOutputSplits))
-    shuffleState = shuffleStates(shuffleId)
+  class ConsolidatedBlockCollector extends BlockStoreCollector {
+    private var shuffleState: ShuffleState = _
+    private var fileGroup: ShuffleFileGroup = _
+    private var shuffleWriteGroup: Array[BlockObjectWriter] = _
 
-    fileGroup = getUnusedFileGroup()
-    shuffleWriteGroup = Array.tabulate(numOutputSplits) { bucketId =>
-      val blockId = ShuffleBlockId(shuffleId, partitionId, bucketId)
-      blockManager.getDiskWriter(blockId, fileGroup(bucketId), serializer, fileBufferSize)
-    }
-  }
+    override def init(context: TaskContext, dep: ShuffleDependency[_, _]) {
+      super.init(context, dep)
 
-  def collect[K, V](key: K, value: V) {
-    val bucketId = partitioner.getPartition(key)
-    shuffleWriteGroup(bucketId).write((key, value).asInstanceOf[Product2[Any, Any]])
-  }
+      shuffleStates.putIfAbsent(shuffleId, new ShuffleState(numOutputSplits))
+      shuffleState = shuffleStates(shuffleId)
 
-  def flush() { }
-
-  def close(isSuccess: Boolean): Option[MapStatus] = {
-    try {
-      val ret = if (isSuccess) {
-        val shuffleMetrics = new ShuffleWriteMetrics
-        var totalBytes = 0L
-        var totalTime = 0L
-        val compressedSizes: Array[Byte] = shuffleWriteGroup.map { writer =>
-          writer.commit()
-          writer.close()
-          val size = writer.fileSegment().length
-          totalBytes += size
-          totalTime += writer.timeWriting()
-          MapOutputTracker.compressSize(size)
-        }
-        fileGroup.recordMapOutput(partitionId, shuffleWriteGroup.map(_.fileSegment().offset))
-        shuffleWriteGroup = null
-
-        shuffleMetrics.shuffleBytesWritten = totalBytes
-        shuffleMetrics.shuffleWriteTime = totalTime
-        taskContext.taskMetrics.shuffleWriteMetrics = Some(shuffleMetrics)
-
-        Option(new MapStatus(blockManager.blockManagerId, compressedSizes))
-      } else {
-        shuffleWriteGroup.foreach { writer =>
-          writer.revertPartialWrites()
-          writer.close()
-        }
-        shuffleWriteGroup = null
-        None
+      fileGroup = getUnusedFileGroup()
+      shuffleWriteGroup = Array.tabulate(numOutputSplits) { bucketId =>
+        val blockId = ShuffleBlockId(shuffleId, partitionId, bucketId)
+        blockManager.getDiskWriter(blockId, fileGroup(bucketId), serializer, fileBufferSize)
       }
+    }
 
-      recycleFileGroup(fileGroup)
-      ret
-    } catch {
-      case e: Exception =>
-        if (shuffleWriteGroup != null) {
-          shuffleWriteGroup.foreach(_.close())
+    def collect[K, V](key: K, value: V) {
+      val bucketId = partitioner.getPartition(key)
+      shuffleWriteGroup(bucketId).write((key, value).asInstanceOf[Product2[Any, Any]])
+    }
+
+    def flush() {}
+
+    def close(isSuccess: Boolean): Option[MapStatus] = {
+      try {
+        val ret = if (isSuccess) {
+          val shuffleMetrics = new ShuffleWriteMetrics
+          var totalBytes = 0L
+          var totalTime = 0L
+          val compressedSizes: Array[Byte] = shuffleWriteGroup.map { writer =>
+            writer.commit()
+            writer.close()
+            val size = writer.fileSegment().length
+            totalBytes += size
+            totalTime += writer.timeWriting()
+            MapOutputTracker.compressSize(size)
+          }
+          fileGroup.recordMapOutput(partitionId, shuffleWriteGroup.map(_.fileSegment().offset))
           shuffleWriteGroup = null
-          recycleFileGroup(fileGroup)
+
+          shuffleMetrics.shuffleBytesWritten = totalBytes
+          shuffleMetrics.shuffleWriteTime = totalTime
+          taskContext.taskMetrics.shuffleWriteMetrics = Some(shuffleMetrics)
+
+          Option(new MapStatus(blockManager.blockManagerId, compressedSizes))
+        } else {
+          shuffleWriteGroup.foreach { writer =>
+            writer.revertPartialWrites()
+            writer.close()
+          }
+          shuffleWriteGroup = null
+          None
         }
-        throw e
+
+        recycleFileGroup(fileGroup)
+        ret
+      } catch {
+        case e: Exception =>
+          if (shuffleWriteGroup != null) {
+            shuffleWriteGroup.foreach(_.close())
+            shuffleWriteGroup = null
+            recycleFileGroup(fileGroup)
+          }
+          throw e
+      }
+    }
+
+    private def getUnusedFileGroup(): ShuffleFileGroup = {
+      val fileGroup = shuffleState.unusedFileGroups.poll()
+      if (fileGroup != null) fileGroup else newFileGroup()
+    }
+
+    private def newFileGroup(): ShuffleFileGroup = {
+      val fileId = shuffleState.nextFileId.getAndIncrement()
+      val files = Array.tabulate[File](numOutputSplits) { bucketId =>
+        val filename = physicalFileName(shuffleId, bucketId, fileId)
+        blockManager.diskBlockManager.getFile(filename)
+      }
+      val fileGroup = new ShuffleFileGroup(fileId, shuffleId, files)
+      shuffleState.allFileGroups.add(fileGroup)
+      fileGroup
+    }
+
+    private def recycleFileGroup(group: ShuffleFileGroup) {
+      shuffleState.unusedFileGroups.add(group)
     }
   }
 
@@ -130,26 +156,6 @@ class ConsolidatedShuffleCollector(blockManager: BlockManager)
       logInfo("Could not find files for shuffle " + shuffleId + " for deleting")
       false
   }
-
-  private def getUnusedFileGroup(): ShuffleFileGroup = {
-    val fileGroup = shuffleState.unusedFileGroups.poll()
-    if (fileGroup != null) fileGroup else newFileGroup()
-  }
-
-  private def newFileGroup(): ShuffleFileGroup = {
-    val fileId = shuffleState.nextFileId.getAndIncrement()
-    val files = Array.tabulate[File](numOutputSplits) { bucketId =>
-      val filename = physicalFileName(shuffleId, bucketId, fileId)
-      blockManager.diskBlockManager.getFile(filename)
-    }
-    val fileGroup = new ShuffleFileGroup(fileId, shuffleId, files)
-    shuffleState.allFileGroups.add(fileGroup)
-    fileGroup
-  }
-
-  private def recycleFileGroup(group: ShuffleFileGroup) {
-    shuffleState.unusedFileGroups.add(group)
-  }
 }
 
 private[spark]
@@ -164,8 +170,6 @@ object ConsolidatedShuffleCollector {
     val unusedFileGroups = new ConcurrentLinkedQueue[ShuffleFileGroup]()
     val allFileGroups = new ConcurrentLinkedQueue[ShuffleFileGroup]()
   }
-
-  val shuffleStates = new TimeStampedHashMap[Int, ShuffleState]()
 
   def physicalFileName(shuffleId: Int, bucketId: Int, fileId: Int) = {
     "merged_shuffle_%d_%d_%d".format(shuffleId, bucketId, fileId)

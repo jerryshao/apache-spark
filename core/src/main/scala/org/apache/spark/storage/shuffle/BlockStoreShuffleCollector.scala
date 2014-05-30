@@ -22,31 +22,32 @@ import org.apache.spark.serializer.Serializer
 import org.apache.spark.storage.{FileSegment, ShuffleBlockId, BlockManager}
 
 private[spark]
-abstract class BlockShuffleCollector(blockManager: BlockManager) extends ShuffleCollector {
+abstract class BlockStoreShuffleCollector(blockManager: BlockManager) extends ShuffleCollector {
   type ShuffleId = Int
 
   val conf = blockManager.conf
+  val fileBufferSize = conf.getInt("spark.shuffle.file.buffer.kb", 100) << 10
 
-  protected var partitionId: Int = _
-  protected var shuffleId: Int = _
-  protected var partitioner: Partitioner = _
-  protected var numOutputSplits: Int = _
-  protected var serializer: Serializer = _
+  abstract class BlockStoreCollector extends Collector {
+    protected var partitionId: Int = _
+    protected var shuffleId: Int = _
+    protected var partitioner: Partitioner = _
+    protected var numOutputSplits: Int = _
+    protected var serializer: Serializer = _
 
-  protected var taskContext: TaskContext = _
-  protected var dep: ShuffleDependency[_, _] = _
+    protected var taskContext: TaskContext = _
+    protected var dep: ShuffleDependency[_, _] = _
 
-  protected val fileBufferSize = conf.getInt("spark.shuffle.file.buffer.kb", 100) << 10
+    def init(context: TaskContext, dep: ShuffleDependency[_, _]) {
+      this.partitionId = context.partitionId
+      this.shuffleId = dep.shuffleId
+      this.partitioner = dep.partitioner
+      this.numOutputSplits = partitioner.numPartitions
+      this.serializer = dep.serializer
 
-  def init(context: TaskContext, dep: ShuffleDependency[_, _]) {
-    this.partitionId = context.partitionId
-    this.shuffleId = dep.shuffleId
-    this.partitioner = dep.partitioner
-    this.numOutputSplits = partitioner.numPartitions
-    this.serializer = dep.serializer
-
-    this.taskContext = context
-    this.dep = dep
+      this.taskContext = context
+      this.dep = dep
+    }
   }
 
   /**

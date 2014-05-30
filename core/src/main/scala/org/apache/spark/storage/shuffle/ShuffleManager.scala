@@ -17,38 +17,25 @@
 
 package org.apache.spark.storage.shuffle
 
-import org.apache.spark.{ShuffleDependency, TaskContext}
+import org.apache.spark.ShuffleFetcher
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.scheduler.MapStatus
+import org.apache.spark.storage.BlockManager
 
 @DeveloperApi
-private[spark]
-trait ShuffleCollector {
+trait ShuffleManager {
 
-  def createCollector: Collector
+  /**
+   * Get ShuffleCollector for map output collect.
+   */
+  def shuffleCollector: ShuffleCollector
 
-  trait Collector {
-    /**
-     * Initialize the shuffle collector. AbstractShuffleCollector will implement
-     * this interface to do basic initialization.
-     */
-    def init(context: TaskContext, dep: ShuffleDependency[_, _])
+  /**
+   * Get ShuffleFetcher for reduce input fetch.
+   */
+  def shuffleFetcher: ShuffleFetcher
 
-    /**
-     * Collect map output key and value accordingly.
-     */
-    def collect[K, V](key: K, value: V)
-
-    /**
-     * Interface for flushing the collected data to destination.
-     */
-    def flush()
-
-    /**
-     * Interface for closing the shuffle collector.
-     * @param isSuccess flag to specify whether the task is success or failed
-     * @return MapStatus if task is success, otherwise return None
-     */
-    def close(isSuccess: Boolean): Option[MapStatus]
-  }
+  /**
+   * BlockManager for shuffle manager.
+   */
+  def blockManager: BlockManager
 }
