@@ -27,6 +27,8 @@ trait ShuffleCollector {
 
   def createCollector: Collector
 
+  def stop()
+
   trait Collector {
     /**
      * Initialize the shuffle collector. AbstractShuffleCollector will implement

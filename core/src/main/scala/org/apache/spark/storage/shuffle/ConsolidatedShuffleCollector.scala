@@ -27,7 +27,7 @@ import org.apache.spark.{MapOutputTracker, ShuffleDependency, TaskContext, Loggi
 import org.apache.spark.executor.ShuffleWriteMetrics
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.storage.{FileSegment, ShuffleBlockId, BlockObjectWriter, BlockManager}
-import org.apache.spark.util.TimeStampedHashMap
+import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedHashMap}
 import org.apache.spark.util.collection.{PrimitiveVector, PrimitiveKeyOpenHashMap}
 
 private[spark]
@@ -37,7 +37,14 @@ class ConsolidatedShuffleCollector(blockManager: BlockManager)
 
   private val shuffleStates = new TimeStampedHashMap[ShuffleId, ShuffleState]()
 
+  private val metadataCleaner =
+    new MetadataCleaner(MetadataCleanerType.SHUFFLE_BLOCK_MANAGER, this.cleanup, conf)
+
   def createCollector(): Collector = new ConsolidatedBlockCollector()
+
+  def stop() {
+    metadataCleaner.cancel()
+  }
 
   class ConsolidatedBlockCollector extends BlockStoreCollector {
     private var shuffleState: ShuffleState = _
@@ -145,16 +152,27 @@ class ConsolidatedShuffleCollector(blockManager: BlockManager)
     throw new IllegalStateException("Failed to find shuffle block: " + id)
   }
 
-  def removeShuffleBlocks(shuffleId: ShuffleId): Boolean = shuffleStates.get(shuffleId) match {
-    case Some(state) =>
-      for (fileGroup <- state.allFileGroups; file <- fileGroup.files) {
-        file.delete()
-      }
-      logInfo("Deleted all files for shuffle " + shuffleId)
-      true
-    case None =>
-      logInfo("Could not find files for shuffle " + shuffleId + " for deleting")
-      false
+  def removeShuffle(shuffleId: ShuffleId): Boolean = {
+    val cleaned = removeShuffleBlocks(shuffleId)
+    shuffleStates.remove(shuffleId)
+    cleaned
+  }
+
+  private def removeShuffleBlocks(shuffleId: ShuffleId): Boolean =
+    shuffleStates.get(shuffleId) match {
+      case Some(state) =>
+        for (fileGroup <- state.allFileGroups; file <- fileGroup.files) {
+          file.delete()
+        }
+        logInfo("Deleted all files for shuffle " + shuffleId)
+        true
+      case None =>
+        logInfo("Could not find files for shuffle " + shuffleId + " for deleting")
+        false
+  }
+
+  private def cleanup(cleanupTime: Long) {
+    shuffleStates.clearOldValues(cleanupTime, (shuffleId, state) => removeShuffleBlocks(shuffleId))
   }
 }
 

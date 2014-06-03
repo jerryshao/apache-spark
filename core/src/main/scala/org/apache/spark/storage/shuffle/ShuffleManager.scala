@@ -17,11 +17,13 @@
 
 package org.apache.spark.storage.shuffle
 
-import org.apache.spark.ShuffleFetcher
+import org.apache.spark.{SparkEnv, ShuffleFetcher}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.storage.BlockManager
+import org.apache.spark.util.Utils
 
 @DeveloperApi
+private[spark]
 trait ShuffleManager {
 
   /**
@@ -38,4 +40,35 @@ trait ShuffleManager {
    * BlockManager for shuffle manager.
    */
   def blockManager: BlockManager
+
+  /**
+   * Clean the shuffle related data according to shuffle id.
+   */
+  def removeShuffle(shuffleId: Int): Boolean
+
+  /**
+   * Interface for stopping the ShuffleManager and cleaning the resources.
+   */
+  def stop()
+}
+
+private[spark]
+object ShuffleManager {
+  private lazy val shuffleManager = synchronized {
+    val blockManager = SparkEnv.get.blockManager
+    val conf = SparkEnv.get.conf
+    val clsName = conf.get("spark.shuffle.manager",
+      "org.apache.spark.storage.shuffle.BlockStoreShuffleManager")
+    val cls = Class.forName(clsName, true, Utils.getContextOrSparkClassLoader)
+    try {
+      cls.getConstructor(classOf[BlockManager])
+        .newInstance(blockManager)
+        .asInstanceOf[ShuffleManager]
+    } catch {
+      case _: NoSuchMethodException =>
+        cls.getConstructor().newInstance().asInstanceOf[ShuffleManager]
+    }
+  }
+
+  def getShuffleManager = shuffleManager
 }

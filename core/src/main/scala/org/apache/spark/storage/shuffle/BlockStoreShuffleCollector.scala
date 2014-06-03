@@ -58,5 +58,5 @@ abstract class BlockStoreShuffleCollector(blockManager: BlockManager) extends Sh
   /**
    * Remove the shuffle blocks according to shuffle id.
    */
-  def removeShuffleBlocks(shuffleId: ShuffleId): Boolean
+  def removeShuffle(shuffleId: ShuffleId): Boolean
 }
