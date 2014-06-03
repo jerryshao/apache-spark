@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.spark
+package org.apache.spark.storage.shuffle
 
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable.HashMap
 
+import org.apache.spark._
 import org.apache.spark.executor.ShuffleReadMetrics
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockId}

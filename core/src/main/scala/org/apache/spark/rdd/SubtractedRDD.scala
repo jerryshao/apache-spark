@@ -110,8 +110,8 @@ private[spark] class SubtractedRDD[K: ClassTag, V: ClassTag, W: ClassTag](
         rdd.iterator(itsSplit, context).asInstanceOf[Iterator[Product2[K, V]]].foreach(op)
 
       case ShuffleCoGroupSplitDep(shuffleId) =>
-        val iter = SparkEnv.get.shuffleFetcher.fetch[Product2[K, V]](shuffleId, partition.index,
-          context, ser)
+        val iter = SparkEnv.get.blockManager.shuffleManager.shuffleFetcher
+          .fetch[Product2[K, V]](shuffleId, partition.index, context, ser)
         iter.foreach(op)
     }
     // the first dep is rdd1; add all values to the map

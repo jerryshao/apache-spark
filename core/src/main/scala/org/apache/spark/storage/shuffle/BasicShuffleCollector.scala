@@ -19,6 +19,8 @@ package org.apache.spark.storage.shuffle
 
 import java.util.concurrent.ConcurrentLinkedQueue
 
+import scala.collection.JavaConversions._
+
 import org.apache.spark.{MapOutputTracker, Logging, TaskContext, ShuffleDependency}
 import org.apache.spark.executor.ShuffleWriteMetrics
 import org.apache.spark.scheduler.MapStatus

@@ -54,7 +54,7 @@ class BlockManagerSlaveActor(
         if (mapOutputTracker != null) {
           mapOutputTracker.unregisterShuffle(shuffleId)
         }
-        blockManager.shuffleBlockManager.removeShuffle(shuffleId)
+        blockManager.shuffleManager.removeShuffle(shuffleId)
       }
 
     case RemoveBroadcast(broadcastId, tellMaster) =>

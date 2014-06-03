@@ -33,6 +33,7 @@ import org.apache.spark.io.CompressionCodec
 import org.apache.spark.network._
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.util._
+import org.apache.spark.storage.shuffle.ShuffleManager
 
 private[spark] sealed trait Values
 
@@ -52,9 +53,9 @@ private[spark] class BlockManager(
   extends Logging {
 
   def conf = _conf
-  val shuffleBlockManager = new ShuffleBlockManager(this)
-  val diskBlockManager = new DiskBlockManager(shuffleBlockManager,
-    conf.get("spark.local.dir",  System.getProperty("java.io.tmpdir")))
+  val shuffleManager = ShuffleManager.getShuffleManager(this, conf)
+  val diskBlockManager = new DiskBlockManager(shuffleManager,
+    conf.get("spark.local.dir", System.getProperty("java.io.tmpdir")))
 
   private val blockInfo = new TimeStampedHashMap[BlockId, BlockInfo]
 
@@ -66,8 +67,7 @@ private[spark] class BlockManager(
     val appFolderName = conf.get("spark.tachyonStore.folderName")
     val tachyonStorePath = s"${storeDir}/${appFolderName}/${this.executorId}"
     val tachyonMaster = conf.get("spark.tachyonStore.url",  "tachyon://localhost:19998")
-    val tachyonBlockManager = new TachyonBlockManager(
-      shuffleBlockManager, tachyonStorePath, tachyonMaster)
+    val tachyonBlockManager = new TachyonBlockManager(conf, tachyonStorePath, tachyonMaster)
     tachyonInitialized = true
     new TachyonStore(this, tachyonBlockManager)
   }
@@ -1042,7 +1042,7 @@ private[spark] class BlockManager(
       heartBeatTask.cancel()
     }
     connectionManager.stop()
-    shuffleBlockManager.stop()
+    shuffleManager.stop()
     diskBlockManager.stop()
     actorSystem.stop(slaveActor)
     blockInfo.clear()

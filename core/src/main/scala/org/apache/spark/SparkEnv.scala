@@ -56,7 +56,6 @@ class SparkEnv (
     val closureSerializer: Serializer,
     val cacheManager: CacheManager,
     val mapOutputTracker: MapOutputTracker,
-    val shuffleFetcher: ShuffleFetcher,
     val broadcastManager: BroadcastManager,
     val blockManager: BlockManager,
     val connectionManager: ConnectionManager,
@@ -80,7 +79,6 @@ class SparkEnv (
     pythonWorkers.foreach { case(key, worker) => worker.stop() }
     httpFileServer.stop()
     mapOutputTracker.stop()
-    shuffleFetcher.stop()
     broadcastManager.stop()
     blockManager.stop()
     blockManager.master.stop()
@@ -219,9 +217,6 @@ object SparkEnv extends Logging {
 
     val cacheManager = new CacheManager(blockManager)
 
-    val shuffleFetcher = instantiateClass[ShuffleFetcher](
-      "spark.shuffle.fetcher", "org.apache.spark.BlockStoreShuffleFetcher")
-
     val httpFileServer = new HttpFileServer(securityManager)
     httpFileServer.initialize()
     conf.set("spark.fileserver.uri",  httpFileServer.serverUri)
@@ -255,7 +250,6 @@ object SparkEnv extends Logging {
       closureSerializer,
       cacheManager,
       mapOutputTracker,
-      shuffleFetcher,
       broadcastManager,
       blockManager,
       connectionManager,

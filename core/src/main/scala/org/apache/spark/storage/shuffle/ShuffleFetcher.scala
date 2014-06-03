@@ -15,8 +15,9 @@
  * limitations under the License.
  */
 
-package org.apache.spark
+package org.apache.spark.storage.shuffle
 
+import org.apache.spark.{SparkEnv, TaskContext}
 import org.apache.spark.serializer.Serializer
 
 private[spark] abstract class ShuffleFetcher {

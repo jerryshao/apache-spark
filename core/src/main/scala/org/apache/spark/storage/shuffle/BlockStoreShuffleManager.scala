@@ -17,8 +17,7 @@
 
 package org.apache.spark.storage.shuffle
 
-import org.apache.spark.ShuffleFetcher
-import org.apache.spark.storage.BlockManager
+import org.apache.spark.storage.{FileSegment, ShuffleBlockId, BlockManager}
 import org.apache.spark.util.Utils
 
 class BlockStoreShuffleManager(val blockManager: BlockManager) extends ShuffleManager {
@@ -31,11 +30,12 @@ class BlockStoreShuffleManager(val blockManager: BlockManager) extends ShuffleMa
       .newInstance(blockManager)
       .asInstanceOf[ShuffleCollector]
   }
-  assert(shuffleCollector.isInstanceOf[BlockStoreShuffleCollector])
+  assert(shuffleCollector.isInstanceOf[BlockStoreShuffleCollector],
+    "Created ShuffleCollector should be inherited from BlockStoreShuffleCollector")
 
   val shuffleFetcher: ShuffleFetcher = {
     val clzName = blockManager.conf.get("spark.shuffle.fetcher",
-      "org.apache.spark.BlockStoreShuffleFetcher")
+      "org.apache.spark.storage.shuffle.BlockStoreShuffleFetcher")
     val clz = Class.forName(clzName, true, Utils.getContextOrSparkClassLoader)
     clz.newInstance().asInstanceOf[ShuffleFetcher]
   }
@@ -44,6 +44,10 @@ class BlockStoreShuffleManager(val blockManager: BlockManager) extends ShuffleMa
 
   def removeShuffle(shuffleId: Int): Boolean = {
     blkShuffleCollector.removeShuffle(shuffleId)
+  }
+
+  def getBlockLocation(id: ShuffleBlockId): FileSegment = {
+    blkShuffleCollector.getBlockLocation(id)
   }
 
   def stop() {

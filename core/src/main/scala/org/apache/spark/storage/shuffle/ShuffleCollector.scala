@@ -31,8 +31,7 @@ trait ShuffleCollector {
 
   trait Collector {
     /**
-     * Initialize the shuffle collector. AbstractShuffleCollector will implement
-     * this interface to do basic initialization.
+     * Initialize the shuffle collector.
      */
     def init(context: TaskContext, dep: ShuffleDependency[_, _])
 

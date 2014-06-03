@@ -25,10 +25,8 @@ import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 import scala.collection.mutable.HashMap
 
 import org.apache.spark._
-import org.apache.spark.executor.ShuffleWriteMetrics
 import org.apache.spark.rdd.{RDD, RDDCheckpointData}
-import org.apache.spark.serializer.Serializer
-import org.apache.spark.storage._
+import org.apache.spark.storage.shuffle.ShuffleCollector
 
 private[spark] object ShuffleMapTask {
 
@@ -141,68 +139,37 @@ private[spark] class ShuffleMapTask(
   }
 
   override def runTask(context: TaskContext): MapStatus = {
-    val numOutputSplits = dep.partitioner.numPartitions
     metrics = Some(context.taskMetrics)
 
     val blockManager = SparkEnv.get.blockManager
-    val shuffleBlockManager = blockManager.shuffleBlockManager
-    var shuffle: ShuffleWriterGroup = null
+    val shuffleCollector = blockManager.shuffleManager.shuffleCollector
+    var collector: ShuffleCollector#Collector = null
+    var ret: Option[MapStatus] = None
+
     var success = false
 
     try {
-      // Obtain all the block writers for shuffle blocks.
-      val ser = Serializer.getSerializer(dep.serializer)
-      shuffle = shuffleBlockManager.forMapTask(dep.shuffleId, partitionId, numOutputSplits, ser)
+      collector = shuffleCollector.createCollector
+      collector.init(context, dep)
 
-      // Write the map output to its associated buckets.
+      // Collect the map output to its associated buckets
       for (elem <- rdd.iterator(split, context)) {
         val pair = elem.asInstanceOf[Product2[Any, Any]]
-        val bucketId = dep.partitioner.getPartition(pair._1)
-        shuffle.writers(bucketId).write(pair)
+        collector.collect(pair._1, pair._2)
       }
-
-      // Commit the writes. Get the size of each bucket block (total block size).
-      var totalBytes = 0L
-      var totalTime = 0L
-      val compressedSizes: Array[Byte] = shuffle.writers.map { writer: BlockObjectWriter =>
-        writer.commit()
-        writer.close()
-        val size = writer.fileSegment().length
-        totalBytes += size
-        totalTime += writer.timeWriting()
-        MapOutputTracker.compressSize(size)
-      }
-
-      // Update shuffle metrics.
-      val shuffleMetrics = new ShuffleWriteMetrics
-      shuffleMetrics.shuffleBytesWritten = totalBytes
-      shuffleMetrics.shuffleWriteTime = totalTime
-      metrics.get.shuffleWriteMetrics = Some(shuffleMetrics)
 
       success = true
-      new MapStatus(blockManager.blockManagerId, compressedSizes)
-    } catch { case e: Exception =>
-      // If there is an exception from running the task, revert the partial writes
-      // and throw the exception upstream to Spark.
-      if (shuffle != null && shuffle.writers != null) {
-        for (writer <- shuffle.writers) {
-          writer.revertPartialWrites()
-          writer.close()
-        }
-      }
-      throw e
     } finally {
-      // Release the writers back to the shuffle block manager.
-      if (shuffle != null && shuffle.writers != null) {
-        try {
-          shuffle.releaseWriters(success)
-        } catch {
-          case e: Exception => logError("Failed to release shuffle writers", e)
-        }
+      try {
+        ret = collector.close(success)
+      } catch {
+        case e: Exception => logError("Failed to release shuffle writers", e)
       }
       // Execute the callbacks on task completion.
       context.executeOnCompleteCallbacks()
     }
+
+    ret.get
   }
 
   override def preferredLocations: Seq[TaskLocation] = preferredLocs

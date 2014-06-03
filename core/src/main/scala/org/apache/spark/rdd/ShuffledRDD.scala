@@ -62,7 +62,8 @@ class ShuffledRDD[K, V, P <: Product2[K, V] : ClassTag](
   override def compute(split: Partition, context: TaskContext): Iterator[P] = {
     val shuffledId = dependencies.head.asInstanceOf[ShuffleDependency[K, V]].shuffleId
     val ser = Serializer.getSerializer(serializer)
-    SparkEnv.get.shuffleFetcher.fetch[P](shuffledId, split.index, context, ser)
+    SparkEnv.get.blockManager.shuffleManager.shuffleFetcher
+      .fetch[P](shuffledId, split.index, context, ser)
   }
 
   override def clearDependencies() {
