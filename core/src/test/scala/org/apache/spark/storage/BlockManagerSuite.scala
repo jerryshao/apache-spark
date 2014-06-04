@@ -38,6 +38,7 @@ import org.apache.spark.util.{AkkaUtils, ByteBufferInputStream, SizeEstimator, U
 
 import scala.language.implicitConversions
 import scala.language.postfixOps
+import org.apache.spark.storage.shuffle.BlockStoreShuffleManager
 
 class BlockManagerSuite extends FunSuite with BeforeAndAfter with PrivateMethodTester {
   private val conf = new SparkConf(false)
@@ -801,9 +802,10 @@ class BlockManagerSuite extends FunSuite with BeforeAndAfter with PrivateMethodT
     // be nice to refactor classes involved in disk storage in a way that
     // allows for easier testing.
     val blockManager = mock(classOf[BlockManager])
-    val shuffleBlockManager = mock(classOf[ShuffleBlockManager])
-    when(shuffleBlockManager.conf).thenReturn(conf)
-    val diskBlockManager = new DiskBlockManager(shuffleBlockManager,
+    val shuffleManager = mock(classOf[BlockStoreShuffleManager])
+    when(shuffleManager.blockManager).thenReturn(blockManager)
+    when(shuffleManager.blockManager.conf).thenReturn(conf)
+    val diskBlockManager = new DiskBlockManager(shuffleManager,
       System.getProperty("java.io.tmpdir"))
 
     when(blockManager.conf).thenReturn(conf.clone.set(confKey, 0.toString))

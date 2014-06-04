@@ -25,7 +25,7 @@ import org.apache.spark.scheduler.MapStatus
 private[spark]
 trait ShuffleCollector {
 
-  def createCollector: Collector
+  def getCollectorForMapTask(): Collector
 
   def stop()
 
@@ -38,7 +38,7 @@ trait ShuffleCollector {
     /**
      * Collect map output key and value accordingly.
      */
-    def collect[K, V](key: K, value: V)
+    def collect(pair: Product2[Any, Any])
 
     /**
      * Interface for flushing the collected data to destination.

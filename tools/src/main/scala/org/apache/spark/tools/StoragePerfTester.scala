@@ -20,9 +20,11 @@ package org.apache.spark.tools
 import java.util.concurrent.{CountDownLatch, Executors}
 import java.util.concurrent.atomic.AtomicLong
 
-import org.apache.spark.SparkContext
+import org.apache.spark.{TaskContext, HashPartitioner, ShuffleDependency, SparkContext}
 import org.apache.spark.serializer.KryoSerializer
 import org.apache.spark.util.Utils
+import org.apache.spark.storage.ShuffleBlockId
+import org.apache.spark.storage.shuffle.BasicShuffleCollector
 
 /**
  * Internal utility for micro-benchmarking shuffle write performance.
@@ -44,7 +46,8 @@ object StoragePerfTester {
     val totalRecords = dataSizeMb * 1000
     val recordsPerMap = totalRecords / numMaps
 
-    val writeData = "1" * recordLength
+    val key = "1" * (recordLength / 2)
+    val writeData = "1" * (recordLength / 2)
     val executor = Executors.newFixedThreadPool(numMaps)
 
     System.setProperty("spark.shuffle.compress", "false")
@@ -53,21 +56,27 @@ object StoragePerfTester {
     // This is only used to instantiate a BlockManager. All thread scheduling is done manually.
     val sc = new SparkContext("local[4]", "Write Tester")
     val blockManager = sc.env.blockManager
+    val shuffleCollector = new BasicShuffleCollector(blockManager)
+
+    val dummyDep = new ShuffleDependency[String, String](sc.makeRDD(Array[(String, String)]()),
+      new HashPartitioner(numOutputSplits), new KryoSerializer(sc.conf))
 
     def writeOutputBytes(mapId: Int, total: AtomicLong) = {
-      val shuffle = blockManager.shuffleBlockManager.forMapTask(1, mapId, numOutputSplits,
-        new KryoSerializer(sc.conf))
-      val writers = shuffle.writers
+      val dummyContext = new TaskContext(0, mapId, mapId)
+      val shuffle = shuffleCollector.getCollectorForMapTask()
+      shuffle.init(dummyContext, dummyDep)
+
       for (i <- 1 to recordsPerMap) {
-        writers(i % numOutputSplits).write(writeData)
-      }
-      writers.map {w =>
-        w.commit()
-        total.addAndGet(w.fileSegment().length)
-        w.close()
+        shuffle.collect((key, writeData).asInstanceOf[Product2[Any, Any]])
       }
 
-      shuffle.releaseWriters(true)
+      shuffle.close(true)
+
+      (0 until numOutputSplits).foreach { i =>
+        val block = ShuffleBlockId(dummyDep.shuffleId, mapId, i)
+        val len = shuffleCollector.getBlockLocation(block).length
+        total.addAndGet(len)
+      }
     }
 
     val start = System.currentTimeMillis()

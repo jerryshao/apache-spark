@@ -43,7 +43,7 @@ abstract class BlockStoreShuffleCollector(blockManager: BlockManager) extends Sh
       this.shuffleId = dep.shuffleId
       this.partitioner = dep.partitioner
       this.numOutputSplits = partitioner.numPartitions
-      this.serializer = dep.serializer
+      this.serializer = Serializer.getSerializer(dep.serializer)
 
       this.taskContext = context
       this.dep = dep

@@ -40,7 +40,7 @@ class ConsolidatedShuffleCollector(blockManager: BlockManager)
   private val metadataCleaner =
     new MetadataCleaner(MetadataCleanerType.SHUFFLE_BLOCK_MANAGER, this.cleanup, conf)
 
-  def createCollector(): Collector = new ConsolidatedBlockCollector()
+  def getCollectorForMapTask(): Collector = new ConsolidatedBlockCollector()
 
   def stop() {
     metadataCleaner.cancel()
@@ -64,9 +64,9 @@ class ConsolidatedShuffleCollector(blockManager: BlockManager)
       }
     }
 
-    def collect[K, V](key: K, value: V) {
-      val bucketId = partitioner.getPartition(key)
-      shuffleWriteGroup(bucketId).write((key, value).asInstanceOf[Product2[Any, Any]])
+    def collect(pair: Product2[Any, Any]) {
+      val bucketId = partitioner.getPartition(pair._1)
+      shuffleWriteGroup(bucketId).write(pair)
     }
 
     def flush() {}

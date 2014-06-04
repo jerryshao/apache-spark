@@ -149,13 +149,13 @@ private[spark] class ShuffleMapTask(
     var success = false
 
     try {
-      collector = shuffleCollector.createCollector
+      collector = shuffleCollector.getCollectorForMapTask()
       collector.init(context, dep)
 
       // Collect the map output to its associated buckets
       for (elem <- rdd.iterator(split, context)) {
         val pair = elem.asInstanceOf[Product2[Any, Any]]
-        collector.collect(pair._1, pair._2)
+        collector.collect(pair)
       }
 
       success = true
