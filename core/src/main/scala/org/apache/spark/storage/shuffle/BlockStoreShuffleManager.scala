@@ -17,10 +17,11 @@
 
 package org.apache.spark.storage.shuffle
 
+import org.apache.spark.Logging
 import org.apache.spark.storage.{FileSegment, ShuffleBlockId, BlockManager}
 import org.apache.spark.util.Utils
 
-class BlockStoreShuffleManager(val blockManager: BlockManager) extends ShuffleManager {
+class BlockStoreShuffleManager(val blockManager: BlockManager) extends ShuffleManager with Logging {
 
   val shuffleCollector: ShuffleCollector = {
     val clzName = blockManager.conf.get("spark.shuffle.collector",

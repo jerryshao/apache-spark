@@ -25,6 +25,7 @@ import org.apache.spark.serializer.KryoSerializer
 import org.apache.spark.util.Utils
 import org.apache.spark.storage.ShuffleBlockId
 import org.apache.spark.storage.shuffle.BasicShuffleCollector
+import scala.util.Random
 
 /**
  * Internal utility for micro-benchmarking shuffle write performance.
@@ -46,8 +47,24 @@ object StoragePerfTester {
     val totalRecords = dataSizeMb * 1000
     val recordsPerMap = totalRecords / numMaps
 
-    val key = "1" * (recordLength / 2)
-    val writeData = "1" * (recordLength / 2)
+    val random = new Random()
+    class TestData extends Product2[Int, String] {
+      @transient val _1 = random.nextInt()
+      val _2 = "1" * recordLength
+      def canEqual(that: Any): Boolean = {
+        if (!that.isInstanceOf[Product2[Int, String]]) {
+          false
+        } else {
+          val obj = that.asInstanceOf[Product2[Int, String]]
+          if (obj._1 == _1 && obj._2 == _2) {
+            true
+          } else {
+            false
+          }
+        }
+      }
+    }
+
     val executor = Executors.newFixedThreadPool(numMaps)
 
     System.setProperty("spark.shuffle.compress", "false")
@@ -58,7 +75,7 @@ object StoragePerfTester {
     val blockManager = sc.env.blockManager
     val shuffleCollector = new BasicShuffleCollector(blockManager)
 
-    val dummyDep = new ShuffleDependency[String, String](sc.makeRDD(Array[(String, String)]()),
+    val dummyDep = new ShuffleDependency[Int, String](sc.makeRDD(Array[(Int, String)]()),
       new HashPartitioner(numOutputSplits), new KryoSerializer(sc.conf))
 
     def writeOutputBytes(mapId: Int, total: AtomicLong) = {
@@ -67,7 +84,7 @@ object StoragePerfTester {
       shuffle.init(dummyContext, dummyDep)
 
       for (i <- 1 to recordsPerMap) {
-        shuffle.collect((key, writeData).asInstanceOf[Product2[Any, Any]])
+        shuffle.collect(new TestData)
       }
 
       shuffle.close(true)

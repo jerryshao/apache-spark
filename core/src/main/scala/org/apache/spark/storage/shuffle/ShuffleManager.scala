@@ -75,7 +75,7 @@ object ShuffleManager {
     }
   }
 
-  def stopShuffleManager() {
+  def stopShuffleManager() = synchronized {
     if (shuffleManager != null) {
       shuffleManager.stop()
       shuffleManager = null
