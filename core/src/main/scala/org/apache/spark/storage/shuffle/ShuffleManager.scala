@@ -74,4 +74,11 @@ object ShuffleManager {
         shuffleManager
     }
   }
+
+  def stopShuffleManager() {
+    if (shuffleManager != null) {
+      shuffleManager.stop()
+      shuffleManager = null
+    }
+  }
 }
