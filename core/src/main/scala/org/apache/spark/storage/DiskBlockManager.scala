@@ -21,7 +21,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.{Date, Random, UUID}
 
-import org.apache.spark.Logging
+import org.apache.spark.shuffle.sort.{SortShuffleWriter, SortShuffleManager}
+import org.apache.spark.{SparkEnv, Logging}
 import org.apache.spark.executor.ExecutorExitCode
 import org.apache.spark.network.netty.{PathResolver, ShuffleSender}
 import org.apache.spark.util.Utils
@@ -57,6 +58,8 @@ private[spark] class DiskBlockManager(shuffleManager: ShuffleBlockManager, rootD
   def getBlockLocation(blockId: BlockId): FileSegment = {
     if (blockId.isShuffle && shuffleManager.consolidateShuffleFiles) {
       shuffleManager.getBlockLocation(blockId.asInstanceOf[ShuffleBlockId])
+    } else if (blockId.isShuffle && SparkEnv.get.shuffleManager.isInstanceOf[SortShuffleManager]) {
+      SortShuffleWriter.getBlockLocation(blockId.asInstanceOf[ShuffleBlockId])
     } else {
       val file = getFile(blockId.name)
       new FileSegment(file, 0, file.length())
