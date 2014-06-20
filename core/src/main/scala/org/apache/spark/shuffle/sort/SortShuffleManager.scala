@@ -58,5 +58,7 @@ class SortShuffleManager(conf: SparkConf) extends ShuffleManager {
   }
 
   /** Shut down this ShuffleManager. */
-  override def stop(): Unit = {}
+  override def stop(): Unit = {
+    SortShuffleWriter.cleanShuffleMetadata()
+  }
 }

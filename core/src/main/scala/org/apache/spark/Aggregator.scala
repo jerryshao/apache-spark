@@ -63,9 +63,10 @@ case class Aggregator[K, V, C] (
     } else {
       val combiners = new ExternalAppendOnlyMap[K, V, C](createCombiner, mergeValue,
         mergeCombiners, customizedComparator = comparator)
+      var kv: Product2[K, V] = null
       while (iter.hasNext) {
-        val (k, v) = iter.next()
-        combiners.insert(k, v)
+        kv = iter.next()
+        combiners.insert(kv._1, kv._2)
       }
       // TODO: Make this non optional in a future release
       Option(context).foreach(c => c.taskMetrics.memoryBytesSpilled = combiners.memoryBytesSpilled)

@@ -33,7 +33,7 @@ class SortShuffleWriter[K, V](
   private val bufSize = conf.getInt("spark.shuffle.file.buffer.kb", 100) * 1024
 
   private val partKeyComparator = new Comparator[(K, _)] {
-    // Use hashcode comparison temporarily, consider keyOrdering
+    // TODO. Use hashcode comparison temporarily, consider keyOrdering
     val keyComparator = new ExternalAppendOnlyMap.KCComparator[K, Any]
 
     def compare(comp1: (K, _), comp2: (K, _)): Int = {
@@ -51,12 +51,17 @@ class SortShuffleWriter[K, V](
     }
   }
 
-  private val aggregator = dep.aggregator.getOrElse {
-    Aggregator[K, V, ArrayBuffer[V]](
+  private val aggregator = if (dep.aggregator.isDefined && dep.mapSideCombine) {
+    // Copy to avoid contaminating reduce-side aggregator
+    val aggre = dep.aggregator.get
+    Aggregator[K, V, Any](aggre.createCombiner, aggre.mergeValue, aggre.mergeCombiners)
+      .asInstanceOf[Aggregator[K, Any, Any]]
+  } else {
+    Aggregator[K, Product2[K, V], ArrayBuffer[Product2[K, V]]](
         v => ArrayBuffer(v),
         (c, v) => c += v,
         (c1, c2) => c1 ++= c2)
-      .asInstanceOf[Aggregator[K, V, Any]]
+      .asInstanceOf[Aggregator[K, Any, Any]]
   }
   aggregator.setComparator(partKeyComparator)
 
@@ -66,40 +71,44 @@ class SortShuffleWriter[K, V](
   private var mapStatus: Option[MapStatus] = None
 
   override def write(records: Iterator[_ <: Product2[K, V]]): Unit = {
-    val iter = aggregator.combineValuesByKey(records, context)
+    val iter = if (dep.mapSideCombine) {
+      aggregator.combineValuesByKey(records, context)
+    } else {
+      // Additional step for iterator here to keep not breaking the original type of Product2
+      aggregator.combineValuesByKey(records.map(r => (r._1, r)), context)
+    }
 
     val shuffleBlockId = ShuffleBlockId(dep.shuffleId, mapId, nextFileId.getAndIncrement())
     val shuffleFile = blockManager.diskBlockManager.getFile(shuffleBlockId)
     var writer = blockManager.getDiskWriter(shuffleBlockId, shuffleFile, ser, bufSize)
 
     val offsets = new Array[Long](numOutputSplits)
-    val compressedSizes = new Array[Byte](numOutputSplits)
-    var previousBucketId: Int = -1
+    val lengths = new Array[Long](numOutputSplits)
+    var previousBucketId: Int = 0
     var totalBytes = 0L
     var totalTime = 0L
 
     try {
       for (it <- iter) {
         val bucketId = dep.partitioner.getPartition(it._1)
-        if (previousBucketId == -1) {
-          previousBucketId = bucketId
-        } else if (previousBucketId != bucketId) {
+        if (previousBucketId != bucketId) {
           writer.commit()
           writer.close()
           val fileSegment = writer.fileSegment()
           offsets(previousBucketId) = fileSegment.offset
+          lengths(previousBucketId) = fileSegment.length
           totalBytes += fileSegment.length
           totalTime += writer.timeWriting()
           previousBucketId = bucketId
 
-          // Reopen the file for another partition
+          // Reopen the file for another partition, must recreate, otherwise will cause issue.
           writer = blockManager.getDiskWriter(shuffleBlockId, shuffleFile, ser, bufSize)
-        } else {
         }
 
-        it._2 match {
-          case p: ArrayBuffer[_] => p.foreach(r => writer.write((it._1, r)))
-          case _ => writer.write(it)
+        if (dep.mapSideCombine) {
+          writer.write(it)
+        } else {
+          it._2.asInstanceOf[ArrayBuffer[_]].foreach(r => writer.write(r))
         }
       }
 
@@ -114,6 +123,7 @@ class SortShuffleWriter[K, V](
 
     val fileSegment = writer.fileSegment()
     offsets(previousBucketId) = fileSegment.offset
+    lengths(previousBucketId) = fileSegment.length
     totalBytes += fileSegment.length
     totalTime += writer.timeWriting()
 
@@ -122,18 +132,18 @@ class SortShuffleWriter[K, V](
     shuffleMetrics.shuffleWriteTime = totalTime
     context.taskMetrics.shuffleWriteMetrics = Some(shuffleMetrics)
 
+    // Fill some offsets of zero size partitions
     var i = 1
     while (i < offsets.length) {
       if (offsets(i) == 0) {
-        offsets(i) = offsets(i - 1)
+        offsets(i) = offsets(i - 1) + lengths(i - 1)
       }
-      compressedSizes(i - 1) = MapOutputTracker.compressSize(offsets(i) - offsets(i - 1))
       i += 1
     }
-    compressedSizes(i - 1) = MapOutputTracker.compressSize(shuffleFile.length() - offsets(i - 1))
 
     shuffleMetadata.recordMapOutput(mapId, shuffleFile, offsets)
-    mapStatus = Some(new MapStatus(blockManager.blockManagerId, compressedSizes))
+    mapStatus = Some(new MapStatus(blockManager.blockManagerId,
+      lengths.map(MapOutputTracker.compressSize(_))))
   }
 
   override def stop(success: Boolean): Option[MapStatus] = {
@@ -157,6 +167,11 @@ object SortShuffleWriter {
     val cleaned = shuffleMetadataMap(shuffleId)
     cleaned.cleanup()
     shuffleMetadataMap.remove(shuffleId)
+  }
+
+  def cleanShuffleMetadata() {
+    shuffleMetadataMap.clear()
+    nextFileId.set(0)
   }
 
   case class ShuffleMetadata(val shuffleId: Int, val numOutputSplits: Int) {
