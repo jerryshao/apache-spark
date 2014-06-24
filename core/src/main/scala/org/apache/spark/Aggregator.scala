@@ -34,8 +34,8 @@ import org.apache.spark.util.collection.{AppendOnlyMap, ExternalAppendOnlyMap}
 case class Aggregator[K, V, C] (
     createCombiner: V => C,
     mergeValue: (C, V) => C,
-    mergeCombiners: (C, C) => C,
-    private var comparator: Option[Comparator[(K, C)]] = None) {
+    mergeCombiners: (C, C) => C) {
+  private var comparator: Option[Comparator[(K, C)]] = None
 
   def setComparator(comparator: Comparator[(K, C)]) {
     this.comparator = Option(comparator)
