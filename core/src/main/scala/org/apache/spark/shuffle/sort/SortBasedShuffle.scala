@@ -27,19 +27,21 @@ import org.apache.spark.executor.ShuffleWriteMetrics
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark._
-import org.apache.spark.util.TimeStampedHashMap
+import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedHashMap}
 import org.apache.spark.util.collection.ExternalAppendOnlyMap
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{BaseShuffleHandle, ShuffleWriter}
 import org.apache.spark.storage.{ShuffleBlockId, FileSegment}
 
-class SortBasedShuffle {
+class SortBasedShuffle(conf: SparkConf) {
   import SortBasedShuffle._
 
-  // missing clean shuffle data.
   private val shuffleMetadataMap = new TimeStampedHashMap[Int, ShuffleMetadata]
   private val nextFileId = new AtomicInteger(0)
+
+  private val metadataCleaner =
+    new MetadataCleaner(MetadataCleanerType.SHUFFLE_BLOCK_MANAGER, this.cleanup, conf)
 
   def getBlockLocation(id: ShuffleBlockId): FileSegment = {
     val shuffleMetadata = shuffleMetadataMap(id.shuffleId)
@@ -53,10 +55,19 @@ class SortBasedShuffle {
     shuffleMetadataMap.remove(shuffleId)
   }
 
+  private def cleanup(cleanupTime: Long) {
+    shuffleMetadataMap.clearOldValues(cleanupTime,
+      (shuffleId, shuffleMetadata) => shuffleMetadata.cleanup())
+  }
+
   def createShuffleWriter[K, V](
       handle: BaseShuffleHandle[K, V, Any],
       mapId: Int,
       context: TaskContext) = new SortBasedShuffleWriter[K, V](handle, mapId, context)
+
+  def stop() {
+    metadataCleaner.cancel()
+  }
 
   protected class SortBasedShuffleWriter[K, V](
       handle: BaseShuffleHandle[K, V, Any],
@@ -68,19 +79,18 @@ class SortBasedShuffle {
     private val numOutputSplits = dep.partitioner.numPartitions
 
     private val blockManager = SparkEnv.get.blockManager
-    private val conf = blockManager.conf
     private val ser = Serializer.getSerializer(dep.serializer.getOrElse(null))
-    private val bufSize = conf.getInt("spark.shuffle.file.buffer.kb", 100) * 1024
+    private val bufSize = conf.getInt("spark.shuffle.file.buffer.kb", 100) << 10
 
-    private val partKeyComparator = new Comparator[(K, _)] {
+    private val partitionKeyComparator = new Comparator[(K, _)] {
       // TODO. Use hashcode comparison temporarily, consider keyOrdering
       val keyComparator = new ExternalAppendOnlyMap.KCComparator[K, Any]
 
       def compare(comp1: (K, _), comp2: (K, _)): Int = {
-        val hash1 = dep.partitioner.getPartition(comp1._1)
-        val hash2 = dep.partitioner.getPartition(comp2._1)
-        if (hash1 != hash2) {
-          hash1 - hash2
+        val part1 = dep.partitioner.getPartition(comp1._1)
+        val part2 = dep.partitioner.getPartition(comp2._1)
+        if (part1 != part2) {
+          part1 - part2
         } else {
           if (dep.aggregator.isDefined) {
             keyComparator.compare(comp1, comp2)
@@ -103,7 +113,7 @@ class SortBasedShuffle {
         (c1, c2) => c1 ++= c2)
         .asInstanceOf[Aggregator[K, Any, Any]]
     }
-    aggregator.setComparator(partKeyComparator)
+    aggregator.setComparator(partitionKeyComparator)
 
     shuffleMetadataMap.putIfAbsent(dep.shuffleId, ShuffleMetadata(dep.shuffleId, numOutputSplits))
 

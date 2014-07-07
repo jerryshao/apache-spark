@@ -26,7 +26,7 @@ import org.apache.spark.shuffle._
  */
 class SortShuffleManager(conf: SparkConf) extends ShuffleManager {
 
-  val sortBasedShuffleImpl = new SortBasedShuffle
+  val sortBasedShuffleImpl = new SortBasedShuffle(conf)
 
   /* Register a shuffle with the manager and obtain a handle for it to pass to tasks. */
   override def registerShuffle[K, V, C](
@@ -62,5 +62,7 @@ class SortShuffleManager(conf: SparkConf) extends ShuffleManager {
   }
 
   /** Shut down this ShuffleManager. */
-  override def stop(): Unit = {}
+  override def stop(): Unit = {
+    sortBasedShuffleImpl.stop()
+  }
 }
