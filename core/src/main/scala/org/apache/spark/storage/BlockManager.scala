@@ -333,14 +333,10 @@ private[spark] class BlockManager(
    * shuffle blocks. It is safe to do so without a lock on block info since disk store
    * never deletes (recent) items.
    */
-  def getLocalShuffleFromDisk(
-      blockId: BlockId, serializer: Serializer): Option[Iterator[Any]] = {
+  def getLocalShuffleFromDisk(blockId: BlockId): Option[ByteBuffer] = {
 
     val shuffleBlockManager = shuffleManager.shuffleBlockManager
-    val values = shuffleBlockManager.getBytes(blockId.asInstanceOf[ShuffleBlockId]).map(
-      bytes => this.dataDeserialize(blockId, bytes, serializer))
-
-    values.orElse {
+    shuffleBlockManager.getBytes(blockId.asInstanceOf[ShuffleBlockId]).orElse {
       throw new BlockException(blockId, s"Block $blockId not found on disk, though it should be")
     }
   }
@@ -558,7 +554,13 @@ private[spark] class BlockManager(
       blocksByAddress: Seq[(BlockManagerId, Seq[(BlockId, Long)])],
       serializer: Serializer,
       readMetrics: ShuffleReadMetrics): BlockFetcherIterator = {
-    val iter = new BlockFetcherIterator.BasicBlockFetcherIterator(this, blocksByAddress, serializer,
+    new BlockFetcherIterator(this, getMultipleBytes(blocksByAddress, readMetrics), serializer)
+  }
+
+  def getMultipleBytes(
+      blocksByAddress: Seq[(BlockManagerId, Seq[(BlockId, Long)])],
+      readMetrics: ShuffleReadMetrics): RawBlockFetcherIterator = {
+    val iter = new BlockFetcherIterator.BasicRawBlockFetcherIterator(this, blocksByAddress,
       readMetrics)
     iter.initialize()
     iter

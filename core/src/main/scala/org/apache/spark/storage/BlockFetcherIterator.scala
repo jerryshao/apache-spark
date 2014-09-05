@@ -17,6 +17,7 @@
 
 package org.apache.spark.storage
 
+import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
 import org.apache.spark.network.netty.client.{BlockClientListener, LazyInitIterator, ReferenceCountedBuffer}
 
@@ -36,10 +37,23 @@ import org.apache.spark.util.Utils
  * A block fetcher iterator interface for fetching shuffle blocks.
  */
 private[storage]
-trait BlockFetcherIterator extends Iterator[(BlockId, Option[Iterator[Any]])] with Logging {
+trait RawBlockFetcherIterator extends Iterator[(BlockId, Option[ByteBuffer])] with Logging {
   def initialize()
 }
 
+private[storage]
+class BlockFetcherIterator(blockManager: BlockManager,
+    iter: RawBlockFetcherIterator,
+    serializer: Serializer)
+  extends Iterator[(BlockId, Option[Iterator[Any]])] {
+
+  def hasNext() = iter.hasNext
+
+  def next(): (BlockId, Option[Iterator[Any]]) = {
+    val (blockId, data) = iter.next()
+    (blockId, data.map(buf => blockManager.dataDeserialize(blockId, buf, serializer)))
+  }
+}
 
 private[storage]
 object BlockFetcherIterator {
@@ -59,19 +73,18 @@ object BlockFetcherIterator {
    * @param blockId block id
    * @param size estimated size of the block, used to calculate bytesInFlight.
    *             Note that this is NOT the exact bytes.
-   * @param deserialize closure to return the result in the form of an Iterator.
+   * @param blockData closure to return raw data of shuffle result.
    */
-  class FetchResult(val blockId: BlockId, val size: Long, val deserialize: () => Iterator[Any]) {
+  class FetchResult(val blockId: BlockId, val size: Long, val blockData: () => ByteBuffer) {
     def failed: Boolean = size == -1
   }
 
   // TODO: Refactor this whole thing to make code more reusable.
-  class BasicBlockFetcherIterator(
+  class BasicRawBlockFetcherIterator(
       private val blockManager: BlockManager,
       val blocksByAddress: Seq[(BlockManagerId, Seq[(BlockId, Long)])],
-      serializer: Serializer,
       readMetrics: ShuffleReadMetrics)
-    extends BlockFetcherIterator {
+    extends RawBlockFetcherIterator {
 
     import blockManager._
 
@@ -121,12 +134,12 @@ object BlockFetcherIterator {
             }
             val blockId = blockMessage.getId
             val networkSize = blockMessage.getData.limit()
-            results.put(new FetchResult(blockId, sizeMap(blockId),
-              () => dataDeserialize(blockId, blockMessage.getData, serializer)))
+            results.put(new FetchResult(blockId, sizeMap(blockId), () => blockMessage.getData))
             // TODO: NettyBlockFetcherIterator has some race conditions where multiple threads can
             // be incrementing bytes read at the same time (SPARK-2625).
             readMetrics.remoteBytesRead += networkSize
             readMetrics.remoteBlocksFetched += 1
+
             logDebug("Got remote block " + blockId + " after " + Utils.getUsedTimeMs(startTime))
           }
         }
@@ -197,7 +210,7 @@ object BlockFetcherIterator {
       for (id <- localBlocksToFetch) {
         try {
           readMetrics.localBlocksFetched += 1
-          results.put(new FetchResult(id, 0, () => getLocalShuffleFromDisk(id, serializer).get))
+          results.put(new FetchResult(id, 0, () => getLocalShuffleFromDisk(id).get))
           logDebug("Got local block " + id)
         } catch {
           case e: Exception => {
@@ -236,7 +249,7 @@ object BlockFetcherIterator {
 
     override def hasNext: Boolean = resultsGotten < _numBlocksToFetch
 
-    override def next(): (BlockId, Option[Iterator[Any]]) = {
+    override def next(): (BlockId, Option[ByteBuffer]) = {
       resultsGotten += 1
       val startFetchWait = System.currentTimeMillis()
       val result = results.take()
@@ -247,7 +260,7 @@ object BlockFetcherIterator {
         (bytesInFlight == 0 || bytesInFlight + fetchRequests.front.size <= maxBytesInFlight)) {
         sendRequest(fetchRequests.dequeue())
       }
-      (result.blockId, if (result.failed) None else Some(result.deserialize()))
+      (result.blockId, if (result.failed) None else Some(result.blockData()))
     }
   }
   // End of BasicBlockFetcherIterator

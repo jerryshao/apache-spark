@@ -31,9 +31,9 @@ import org.mockito.Matchers.{any, eq => meq}
 import org.mockito.stubbing.Answer
 import org.mockito.invocation.InvocationOnMock
 
-import org.apache.spark.storage.BlockFetcherIterator._
-import org.apache.spark.network.{ConnectionManager, Message}
 import org.apache.spark.executor.ShuffleReadMetrics
+import org.apache.spark.network.{ConnectionManager, Message}
+import org.apache.spark.storage.BlockFetcherIterator._
 
 class BlockFetcherIteratorSuite extends FunSuite with Matchers {
 
@@ -52,48 +52,47 @@ class BlockFetcherIteratorSuite extends FunSuite with Matchers {
       ShuffleBlockId(0,3,0),
       ShuffleBlockId(0,4,0))
 
-    val optItr = mock(classOf[Option[Iterator[Any]]])
-    val answer = new Answer[Option[Iterator[Any]]] {
-      override def answer(invocation: InvocationOnMock) = Option[Iterator[Any]] {
+    val optBytes = mock(classOf[Option[ByteBuffer]])
+    val answer = new Answer[Option[ByteBuffer]] {
+      override def answer(invocation: InvocationOnMock) = Option[ByteBuffer] {
         throw new Exception
       }
     }
 
     // 3rd block is going to fail
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(0)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(1)), any())
-    doAnswer(answer).when(blockManager).getLocalShuffleFromDisk(meq(blIds(2)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(3)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(4)), any())
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(0)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(1)))
+    doAnswer(answer).when(blockManager).getLocalShuffleFromDisk(meq(blIds(2)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(3)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(4)))
 
     val bmId = BlockManagerId("test-client", "test-client", 1)
     val blocksByAddress = Seq[(BlockManagerId, Seq[(BlockId, Long)])](
       (bmId, blIds.map(blId => (blId, 1.asInstanceOf[Long])).toSeq)
     )
 
-    val iterator = new BasicBlockFetcherIterator(blockManager, blocksByAddress, null,
+    val iterator = new BasicRawBlockFetcherIterator(blockManager, blocksByAddress,
       new ShuffleReadMetrics())
-
     iterator.initialize()
 
     // Without exhausting the iterator, the iterator should be lazy and not call getLocalShuffleFromDisk.
-    verify(blockManager, times(0)).getLocalShuffleFromDisk(any(), any())
+    verify(blockManager, times(0)).getLocalShuffleFromDisk(any())
 
     assert(iterator.hasNext, "iterator should have 5 elements but actually has no elements")
     // the 2nd element of the tuple returned by iterator.next should be defined when fetching successfully
     assert(iterator.next()._2.isDefined, "1st element should be defined but is not actually defined")
-    verify(blockManager, times(1)).getLocalShuffleFromDisk(any(), any())
+    verify(blockManager, times(1)).getLocalShuffleFromDisk(any())
 
     assert(iterator.hasNext, "iterator should have 5 elements but actually has 1 element")
     assert(iterator.next()._2.isDefined, "2nd element should be defined but is not actually defined")
-    verify(blockManager, times(2)).getLocalShuffleFromDisk(any(), any())
+    verify(blockManager, times(2)).getLocalShuffleFromDisk(any())
 
     assert(iterator.hasNext, "iterator should have 5 elements but actually has 2 elements")
     // 3rd fetch should be failed
     intercept[Exception] {
       iterator.next()
     }
-    verify(blockManager, times(3)).getLocalShuffleFromDisk(any(), any())
+    verify(blockManager, times(3)).getLocalShuffleFromDisk(any())
   }
 
 
@@ -112,40 +111,39 @@ class BlockFetcherIteratorSuite extends FunSuite with Matchers {
       ShuffleBlockId(0,3,0),
       ShuffleBlockId(0,4,0))
 
-    val optItr = mock(classOf[Option[Iterator[Any]]])
- 
+    val optBytes = mock(classOf[Option[ByteBuffer]])
+
    // All blocks should be fetched successfully
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(0)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(1)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(2)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(3)), any())
-    doReturn(optItr).when(blockManager).getLocalShuffleFromDisk(meq(blIds(4)), any())
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(0)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(1)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(2)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(3)))
+    doReturn(optBytes).when(blockManager).getLocalShuffleFromDisk(meq(blIds(4)))
 
     val bmId = BlockManagerId("test-client", "test-client", 1)
     val blocksByAddress = Seq[(BlockManagerId, Seq[(BlockId, Long)])](
       (bmId, blIds.map(blId => (blId, 1.asInstanceOf[Long])).toSeq)
     )
 
-    val iterator = new BasicBlockFetcherIterator(blockManager, blocksByAddress, null,
+    val iterator = new BasicRawBlockFetcherIterator(blockManager, blocksByAddress,
       new ShuffleReadMetrics())
-
     iterator.initialize()
 
     // Without exhausting the iterator, the iterator should be lazy and not call getLocalShuffleFromDisk.
-    verify(blockManager, times(0)).getLocalShuffleFromDisk(any(), any())
+    verify(blockManager, times(0)).getLocalShuffleFromDisk(any())
 
     assert(iterator.hasNext, "iterator should have 5 elements but actually has no elements")
-    assert(iterator.next._2.isDefined, "All elements should be defined but 1st element is not actually defined") 
+    assert(iterator.next._2.isDefined, "All elements should be defined but 1st element is not actually defined")
     assert(iterator.hasNext, "iterator should have 5 elements but actually has 1 element")
-    assert(iterator.next._2.isDefined, "All elements should be defined but 2nd element is not actually defined") 
+    assert(iterator.next._2.isDefined, "All elements should be defined but 2nd element is not actually defined")
     assert(iterator.hasNext, "iterator should have 5 elements but actually has 2 elements")
-    assert(iterator.next._2.isDefined, "All elements should be defined but 3rd element is not actually defined") 
+    assert(iterator.next._2.isDefined, "All elements should be defined but 3rd element is not actually defined")
     assert(iterator.hasNext, "iterator should have 5 elements but actually has 3 elements")
-    assert(iterator.next._2.isDefined, "All elements should be defined but 4th element is not actually defined") 
+    assert(iterator.next._2.isDefined, "All elements should be defined but 4th element is not actually defined")
     assert(iterator.hasNext, "iterator should have 5 elements but actually has 4 elements")
     assert(iterator.next._2.isDefined, "All elements should be defined but 5th element is not actually defined")
 
-    verify(blockManager, times(5)).getLocalShuffleFromDisk(any(), any())
+    verify(blockManager, times(5)).getLocalShuffleFromDisk(any())
   }
 
   test("block fetch from remote fails using BasicBlockFetcherIterator") {
@@ -171,8 +169,8 @@ class BlockFetcherIteratorSuite extends FunSuite with Matchers {
       (bmId, Seq((blId1, 1L), (blId2, 1L)))
     )
 
-    val iterator = new BasicBlockFetcherIterator(blockManager,
-      blocksByAddress, null, new ShuffleReadMetrics())
+    val iterator = new BasicRawBlockFetcherIterator(blockManager,
+      blocksByAddress, new ShuffleReadMetrics())
 
     iterator.initialize()
     iterator.foreach{
@@ -225,8 +223,8 @@ class BlockFetcherIteratorSuite extends FunSuite with Matchers {
       (bmId, Seq((blId1, 1L), (blId2, 1L)))
     )
 
-    val iterator = new BasicBlockFetcherIterator(blockManager,
-      blocksByAddress, null, new ShuffleReadMetrics())
+    val iterator = new BasicRawBlockFetcherIterator(blockManager,
+      blocksByAddress, new ShuffleReadMetrics())
     iterator.initialize()
     iterator.foreach{
       case (_, r) => {
