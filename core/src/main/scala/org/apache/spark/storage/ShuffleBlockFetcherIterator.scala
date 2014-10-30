@@ -49,7 +49,7 @@ final class ShuffleBlockFetcherIterator(
   def next(): (BlockId, Option[Iterator[Any]]) = {
     val (blockId, rawBuf) = shuffleRawBlockFetcherItr.next()
     (blockId, rawBuf.map { b =>
-      val is = blockManager.wrapForCompression(blockId, b.inputStream())
+      val is = blockManager.wrapForCompression(blockId, b.createInputStream())
       val iter = serializer.newInstance().deserializeStream(is).asIterator
       CompletionIterator[Any, Iterator[Any]](iter, {
         // Once the iterator is exhausted, release the buffer and set currentResult to null
