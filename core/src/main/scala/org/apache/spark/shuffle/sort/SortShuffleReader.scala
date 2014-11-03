@@ -19,7 +19,7 @@ package org.apache.spark.shuffle.sort
 
 import java.io.{File, BufferedOutputStream, FileOutputStream}
 import java.util.Comparator
-import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.{LinkedBlockingQueue, PriorityBlockingQueue}
 
 import scala.collection.mutable.{ArrayBuffer, HashMap}
 import scala.reflect.ClassTag
@@ -90,7 +90,7 @@ private[spark] class SortShuffleReader[K, C](
   private var shuffleRawBlockFetcherItr: ShuffleRawBlockFetcherIterator = _
 
   /** Array of in-memory shuffle blocks for merging */
-  private val inMemoryBlocks = new PriorityBlockingQueue[MemoryShuffleBlock]()
+  private val inMemoryBlocks = new LinkedBlockingQueue[MemoryShuffleBlock]()
 
   /** Array of on-disk shuffle blocks for merging */
   private val onDiskBlocks = new PriorityBlockingQueue[DiskShuffleBlock]()
@@ -142,7 +142,7 @@ private[spark] class SortShuffleReader[K, C](
     }
   }
 
-  def read(): Iterator[Product2[K, C]] = {
+  override def read(): Iterator[Product2[K, C]] = {
     inMemoryMerger.initialize(inMemoryMergeWidth)
     inMemoryMerger.start()
 
@@ -211,7 +211,7 @@ private[spark] class SortShuffleReader[K, C](
     new InterruptibleIterator(context, completionItr.map(p => (p._1, p._2)))
   }
 
-  def stop(): Unit = ???
+  override def stop(): Unit = ???
 
   private def fetchRawBlocks(): Iterator[(BlockId, Option[ManagedBuffer])] = {
     val statuses = SparkEnv.get.mapOutputTracker.getServerStatuses(handle.shuffleId, startPartition)
