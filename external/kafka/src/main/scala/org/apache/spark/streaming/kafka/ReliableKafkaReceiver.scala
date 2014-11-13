@@ -18,7 +18,7 @@
 package org.apache.spark.streaming.kafka
 
 import java.util.Properties
-import java.util.concurrent.{ThreadPoolExecutor, ConcurrentHashMap}
+import java.util.concurrent.{ConcurrentHashMap, ThreadPoolExecutor}
 
 import scala.collection.{Map, mutable}
 import scala.reflect.{ClassTag, classTag}
@@ -75,7 +75,8 @@ class ReliableKafkaReceiver[
   private var topicPartitionOffsetMap: mutable.HashMap[TopicAndPartition, Long] = null
 
   /** A concurrent HashMap to store the stream block id and related offset snapshot. */
-  private var blockOffsetMap: ConcurrentHashMap[StreamBlockId, Map[TopicAndPartition, Long]] = null
+  private var blockOffsetMap:
+    ConcurrentHashMap[StreamBlockId, Map[TopicAndPartition, Long]] = null
 
   /**
    * Manage the BlockGenerator in receiver itself for better managing block store and offset
@@ -85,6 +86,8 @@ class ReliableKafkaReceiver[
 
   /** Thread pool running the handlers for receiving message from multiple topics and partitions. */
   private var messageHandlerThreadPool: ThreadPoolExecutor = null
+
+  private var currentBlockId: StreamBlockId = null
 
   override def onStart(): Unit = {
     logInfo(s"Starting Kafka Consumer Stream with group: $groupId")
@@ -96,7 +99,7 @@ class ReliableKafkaReceiver[
     blockOffsetMap = new ConcurrentHashMap[StreamBlockId, Map[TopicAndPartition, Long]]()
 
     // Initialize the block generator for storing Kafka message.
-    blockGenerator = new BlockGenerator(new GeneratedBlockHandler, streamId, conf)
+    blockGenerator = new CustomBlockGenerator(new GeneratedBlockHandler)
 
     if (kafkaParams.contains(AUTO_OFFSET_COMMIT) && kafkaParams(AUTO_OFFSET_COMMIT) == "true") {
       logWarning(s"$AUTO_OFFSET_COMMIT should be set to false in ReliableKafkaReceiver, " +
@@ -145,11 +148,6 @@ class ReliableKafkaReceiver[
   }
 
   override def onStop(): Unit = {
-    if (messageHandlerThreadPool != null) {
-      messageHandlerThreadPool.shutdown()
-      messageHandlerThreadPool = null
-    }
-
     if (consumerConnector != null) {
       consumerConnector.shutdown()
       consumerConnector = null
@@ -158,6 +156,11 @@ class ReliableKafkaReceiver[
     if (zkClient != null) {
       zkClient.close()
       zkClient = null
+    }
+
+    if (messageHandlerThreadPool != null) {
+      messageHandlerThreadPool.shutdown()
+      messageHandlerThreadPool = null
     }
 
     if (blockGenerator != null) {
@@ -199,6 +202,7 @@ class ReliableKafkaReceiver[
   private def storeBlockAndCommitOffset(
       blockId: StreamBlockId, arrayBuffer: mutable.ArrayBuffer[_]): Unit = {
     store(arrayBuffer.asInstanceOf[mutable.ArrayBuffer[(K, V)]])
+
     Option(blockOffsetMap.get(blockId)).foreach(commitOffset)
     blockOffsetMap.remove(blockId)
   }
@@ -221,10 +225,10 @@ class ReliableKafkaReceiver[
 
         ZkUtils.updatePersistentPath(zkClient, zkPath, offset.toString)
       } catch {
-        case t: Throwable => logWarning(s"Exception during commit offset $offset for topic" +
-          s"${topicAndPart.topic}, partition ${topicAndPart.partition}", t)
+        case e: Exception =>
+          logWarning(s"Exception during commit offset $offset for topic" +
+            s"${topicAndPart.topic}, partition ${topicAndPart.partition}", e)
       }
-
       logInfo(s"Committed offset $offset for topic ${topicAndPart.topic}, " +
         s"partition ${topicAndPart.partition}")
     }
@@ -241,9 +245,20 @@ class ReliableKafkaReceiver[
           }
         } catch {
           case e: Exception =>
-            logError("Error handling message", e)
+            restart("Error handling message", e)
         }
       }
+    }
+  }
+
+  /**
+   * Custom BlockGenerator class that synchronizes on the Receiver object before
+   * switching the receiving buffer.
+   */
+  private final class CustomBlockGenerator(listener: BlockGeneratorListener)
+    extends BlockGenerator(listener, streamId, conf) {
+    override def updateCurrentBuffer(time: Long): Unit = ReliableKafkaReceiver.this.synchronized {
+      super.updateCurrentBuffer(time)
     }
   }
 
@@ -261,7 +276,7 @@ class ReliableKafkaReceiver[
     }
 
     override def onError(message: String, throwable: Throwable): Unit = {
-      reportError(message, throwable)
+      restart(message, throwable)
     }
   }
 }

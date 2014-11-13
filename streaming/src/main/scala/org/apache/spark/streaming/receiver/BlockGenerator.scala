@@ -90,7 +90,7 @@ private[streaming] class BlockGenerator(
   }
 
   /** Change the buffer to which single records are added to. */
-  private def updateCurrentBuffer(time: Long): Unit =  {
+  protected def updateCurrentBuffer(time: Long): Unit = {
     try {
       val newBlockBuffer = currentBuffer
       synchronized { currentBuffer = new ArrayBuffer[Any] }
@@ -104,8 +104,8 @@ private[streaming] class BlockGenerator(
     } catch {
       case ie: InterruptedException =>
         logInfo("Block updating timer thread was interrupted")
-      case t: Throwable =>
-        reportError("Error in block updating thread", t)
+      case e: Exception =>
+        reportError("Error in block updating thread", e)
     }
   }
 
@@ -131,8 +131,8 @@ private[streaming] class BlockGenerator(
     } catch {
       case ie: InterruptedException =>
         logInfo("Block pushing thread was interrupted")
-      case t: Throwable =>
-        reportError("Error in block pushing thread", t)
+      case e: Exception =>
+        reportError("Error in block pushing thread", e)
     }
   }
 
