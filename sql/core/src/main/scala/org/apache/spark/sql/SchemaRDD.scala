@@ -497,7 +497,8 @@ class SchemaRDD(
   }
 
   override def unpersist(blocking: Boolean): this.type = {
-    sqlContext.uncacheQuery(this, blocking)
+    sqlContext.tryUncacheQuery(this, blocking)
+    //sqlContext.uncacheQuery(this, blocking)
     this
   }
 }

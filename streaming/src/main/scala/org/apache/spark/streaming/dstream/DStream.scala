@@ -279,7 +279,7 @@ abstract class DStream[T: ClassTag] (
    * Get the RDD corresponding to the given time; either retrieve it from cache
    * or compute-and-cache it.
    */
-  private[streaming] def getOrCompute(time: Time): Option[RDD[T]] = {
+  private[spark] def getOrCompute(time: Time): Option[RDD[T]] = {
     // If RDD was already generated, then retrieve it from HashMap,
     // or else compute the RDD
     generatedRDDs.get(time).orElse {
