@@ -225,6 +225,10 @@ class StreamingContext private[streaming] (
 
   private[streaming] def getNewReceiverStreamId() = nextReceiverInputStreamId.getAndIncrement()
 
+  private val nextDStreamId = new AtomicInteger(0)
+
+  private[spark] def newDStreamId(): Int = nextDStreamId.getAndIncrement()
+
   /**
    * Create an input stream with any arbitrary user implemented receiver.
    * Find more details at: http://spark.apache.org/docs/latest/streaming-custom-receivers.html

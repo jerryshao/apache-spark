@@ -19,6 +19,7 @@ package org.apache.spark.streaming.dstream
 
 
 import java.io.{IOException, ObjectInputStream, ObjectOutputStream}
+import java.util.concurrent.atomic.AtomicInteger
 
 import scala.deprecated
 import scala.collection.mutable.HashMap
@@ -109,6 +110,9 @@ abstract class DStream[T: ClassTag] (
 
   /* Set the creation call site */
   private[streaming] val creationSite = DStream.getCreationSite()
+
+  /** A unique ID for this DStream (within its StreamingContext). */
+  val streamId: Int = ssc.newDStreamId()
 
   /** Persist the RDDs of this DStream with the given storage level */
   def persist(level: StorageLevel): DStream[T] = {
