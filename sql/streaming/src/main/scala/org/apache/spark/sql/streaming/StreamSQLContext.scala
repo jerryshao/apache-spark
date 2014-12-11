@@ -17,10 +17,6 @@
 
 package org.apache.spark.sql.streaming
 
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.sources.LogicalRelation
-
-import scala.collection.mutable
 import scala.reflect.runtime.universe.TypeTag
 
 import org.apache.spark.{Logging, SparkConf, SparkContext}
@@ -30,44 +26,45 @@ import org.apache.spark.sql.catalyst.dsl.ExpressionConversions
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.types.StructType
 import org.apache.spark.sql.execution.{RDDConversions, SparkPlan}
+import org.apache.spark.sql.sources.LogicalRelation
 import org.apache.spark.streaming.dstream.{ConstantInputDStream, DStream}
 import org.apache.spark.streaming.{Duration, StreamingContext}
 
 class StreamSQLContext(
     ssc: StreamingContext,
-    localSqlContext: SQLContext)
+    sqlContext: SQLContext)
   extends Logging with ExpressionConversions {
 
   self =>
 
   def this(ssc: StreamingContext) = this(ssc, new SQLContext(ssc.sparkContext))
 
-  def streamingContext = this.ssc
+  def localStreamingContext = this.ssc
 
-  def sqlContext = this.localSqlContext
+  def localSqlContext = this.sqlContext
 
   protected[sql] def precompilePlan(streamPlan: LogicalPlan): LogicalPlan = {
-    val analyzedPlan = localSqlContext.analyzer(streamPlan)
-    val optimizedPlan = localSqlContext.optimizer(analyzedPlan)
+    val analyzedPlan = sqlContext.analyzer(streamPlan)
+    val optimizedPlan = sqlContext.optimizer(analyzedPlan)
     optimizedPlan
   }
 
-  protected[sql] def executePlan(plan: LogicalPlan) = sqlContext.executePlan(plan)
+  protected[sql] def executePlan(plan: LogicalPlan) = localSqlContext.executePlan(plan)
 
   // Add stream specific strategies to SQLContext
-  localSqlContext.extraStrategies = StreamStrategy :: Nil
+  sqlContext.extraStrategies = StreamStrategy :: Nil
 
   // Streaming specific ddl parser.
-  val ddlParser = new StreamDDLParser { val streamSqlContext = self }
+  protected[sql] val ddlParser = new StreamDDLParser { val streamSqlContext = self }
 
   protected[sql] def parseSql(sql: String): LogicalPlan = {
-    ddlParser(sql).getOrElse(localSqlContext.parseSql(sql))
+    ddlParser(sql).getOrElse(sqlContext.parseSql(sql))
   }
 
   def logicalPlanToStreamQuery(plan: LogicalPlan): SchemaDStream = new SchemaDStream(this, plan)
 
   def createSchemaDStream[A <: Product : TypeTag](stream: DStream[A]) = {
-    SparkPlan.currentContext.set(localSqlContext)
+    SparkPlan.currentContext.set(sqlContext)
     val attributes = ScalaReflection.attributesFor[A]
     val schema = StructType.fromAttributes(attributes)
     val rowStream = stream.transform(rdd => RDDConversions.productToRowRdd(rdd, schema))
@@ -83,23 +80,17 @@ class StreamSQLContext(
     new SchemaDStream(this, logicalPlan)
   }
 
-  def sql(sqlText: String): SchemaDStream = {
-    if (localSqlContext.dialect == "sql") {
-      new SchemaDStream(this, parseSql(sqlText))
-    } else {
-      sys.error(s"Unsupported SQL dialect: ${localSqlContext.dialect}")
-    }
-  }
+  def sql(sqlText: String): SchemaDStream = new SchemaDStream(this, parseSql(sqlText))
 
   def registerDStreamAsTempStream(stream: SchemaDStream, streamName: String): Unit = {
-    localSqlContext.catalog.registerTable(None, streamName, stream.baseLogicalPlan)
+    sqlContext.catalog.registerTable(None, streamName, stream.logicalPlan)
   }
 
   def stream(streamName: String): SchemaDStream =
-    new SchemaDStream(this, localSqlContext.catalog.lookupRelation(None, streamName))
+    new SchemaDStream(this, sqlContext.catalog.lookupRelation(None, streamName))
 
   def dropTempStream(streamName: String): Unit = {
-    localSqlContext.catalog.unregisterTable(None, streamName)
+    sqlContext.catalog.unregisterTable(None, streamName)
   }
 }
 
@@ -116,17 +107,12 @@ object Test {
 
     val schemaStream = streamSqlContext.createSchemaDStream(constantStream)
     //val a = schemaStream.where('i > 5).select('i)
-    streamSqlContext.registerDStreamAsTempStream(schemaStream, "test")
-    val a = streamSqlContext.sql("select * from test where i > 6 and i < 9")
+    val a = streamSqlContext.sql(
+      """CREATE TEMPORARY STREAM avro
+        |USING org.apache.spark.sql.avro
+        |OPTIONS (path "xxxx", abc "fdsa", fdsa "ewrq")
+      """.stripMargin)
+    a.foreachRDD(rdd => rdd.foreach(println))
 
-    val rddQueue = new mutable.SynchronizedQueue[RDD[SingleInt]]()
-    rddQueue += rdd
-
-    // Create the QueueInputDStream and use it do some processing
-    val inputStream = ssc.queueStream(rddQueue)
-    inputStream.foreachRDD(r => r.foreach(println))
-    ssc.start()
-
-    ssc.awaitTermination()
   }
 }

@@ -19,6 +19,7 @@ package org.apache.spark.sql.streaming
 
 import org.apache.spark.sql.sources.LogicalRelation
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.rdd.RDD
@@ -33,7 +34,7 @@ import org.apache.spark.streaming.{Duration, Time}
 class SchemaDStream(
     val streamSqlContext: StreamSQLContext,
     val baseLogicalPlan: LogicalPlan)
-  extends DStream[Row](streamSqlContext.streamingContext) {
+  extends DStream[Row](streamSqlContext.localStreamingContext) {
 
   override def dependencies = physicalStream.toList
 
@@ -50,8 +51,11 @@ class SchemaDStream(
   protected[sql] val logicalPlan: LogicalPlan = baseLogicalPlan match {
     case _: Command =>
       val queryExecution = streamSqlContext.executePlan(baseLogicalPlan)
+      val oneshotQueue = new mutable.Queue[RDD[Row]]()
+      oneshotQueue += queryExecution.toRdd
+      val oneshotDStream = streamSqlContext.localStreamingContext.queueStream(oneshotQueue, true, null)
       // FIXME. null should be replaced as a normal DStream
-      LogicalDStream(queryExecution.analyzed.output, null)(streamSqlContext)
+      LogicalDStream(queryExecution.analyzed.output, oneshotDStream)(streamSqlContext)
     case _ =>
       baseLogicalPlan
   }

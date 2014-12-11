@@ -11,7 +11,7 @@ trait StreamRelationProvider {
 }
 
 abstract class BaseStreamRelation extends BaseRelation {
-  val sqlContext = streamSqlContext.sqlContext
+  val sqlContext = streamSqlContext.localSqlContext
 
   def streamSqlContext: StreamSQLContext
 }
