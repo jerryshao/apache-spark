@@ -42,6 +42,7 @@ import org.apache.spark.deploy.DeployMessages._
 import org.apache.spark.deploy.history.HistoryServer
 import org.apache.spark.deploy.master.DriverState.DriverState
 import org.apache.spark.deploy.master.MasterMessages._
+import org.apache.spark.deploy.master.scheduler.FIFOScheduler
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.scheduler.{EventLoggingListener, ReplayListenerBus}
@@ -87,6 +88,8 @@ private[spark] class Master(
 
   Utils.checkHost(host, "Expected hostname")
 
+  val resourceScheduler = new FIFOScheduler(this)
+
   val masterMetricsSystem = MetricsSystem.createMetricsSystem("master", conf, securityMgr)
   val applicationMetricsSystem = MetricsSystem.createMetricsSystem("applications", conf,
     securityMgr)
@@ -129,6 +132,9 @@ private[spark] class Master(
     webUi.bind()
     masterWebUiUrl = "http://" + masterPublicAddress + ":" + webUi.boundPort
     context.system.scheduler.schedule(0 millis, WORKER_TIMEOUT millis, self, CheckForWorkerTimeOut)
+
+    // Initialize the resource scheduler
+    resourceScheduler.initialize(conf)
 
     masterMetricsSystem.registerSource(masterSource)
     masterMetricsSystem.start()
@@ -225,7 +231,7 @@ private[spark] class Master(
         if (registerWorker(worker)) {
           persistenceEngine.addWorker(worker)
           sender ! RegisteredWorker(masterUrl, masterWebUiUrl)
-          schedule()
+          resourceScheduler.schedule()
         } else {
           val workerAddress = worker.actor.path.address
           logWarning("Worker registration failed. Attempted to re-register worker at same " +
@@ -246,7 +252,7 @@ private[spark] class Master(
         persistenceEngine.addDriver(driver)
         waitingDrivers += driver
         drivers.add(driver)
-        schedule()
+        resourceScheduler.schedule()
 
         // TODO: It might be good to instead have the submission client poll the master to determine
         //       the current status of the driver. For now it's simply "fire and forget".
@@ -308,7 +314,7 @@ private[spark] class Master(
         logInfo("Registered app " + description.name + " with ID " + app.id)
         persistenceEngine.addApplication(app)
         sender ! RegisteredApplication(app.id, masterUrl)
-        schedule()
+        resourceScheduler.schedule()
       }
     }
 
@@ -330,7 +336,7 @@ private[spark] class Master(
             // Only retry certain number of times so we don't go into an infinite loop.
             if (!normalExit) {
               if (appInfo.incrementRetryCount() < ApplicationState.MAX_NUM_RETRY) {
-                schedule()
+                resourceScheduler.schedule()
               } else {
                 val execs = appInfo.executors.values
                 if (!execs.exists(_.state == ExecutorState.RUNNING)) {
@@ -493,92 +499,8 @@ private[spark] class Master(
     }
 
     state = RecoveryState.ALIVE
-    schedule()
+    resourceScheduler.schedule()
     logInfo("Recovery complete - resuming operations!")
-  }
-
-  /**
-   * Can an app use the given worker? True if the worker has enough memory and we haven't already
-   * launched an executor for the app on it (right now the standalone backend doesn't like having
-   * two executors on the same worker).
-   */
-  def canUse(app: ApplicationInfo, worker: WorkerInfo): Boolean = {
-    worker.memoryFree >= app.desc.memoryPerSlave && !worker.hasExecutor(app)
-  }
-
-  /**
-   * Schedule the currently available resources among waiting apps. This method will be called
-   * every time a new app joins or resource availability changes.
-   */
-  private def schedule() {
-    if (state != RecoveryState.ALIVE) { return }
-
-    // First schedule drivers, they take strict precedence over applications
-    // Randomization helps balance drivers
-    val shuffledAliveWorkers = Random.shuffle(workers.toSeq.filter(_.state == WorkerState.ALIVE))
-    val numWorkersAlive = shuffledAliveWorkers.size
-    var curPos = 0
-
-    for (driver <- waitingDrivers.toList) { // iterate over a copy of waitingDrivers
-      // We assign workers to each waiting driver in a round-robin fashion. For each driver, we
-      // start from the last worker that was assigned a driver, and continue onwards until we have
-      // explored all alive workers.
-      var launched = false
-      var numWorkersVisited = 0
-      while (numWorkersVisited < numWorkersAlive && !launched) {
-        val worker = shuffledAliveWorkers(curPos)
-        numWorkersVisited += 1
-        if (worker.memoryFree >= driver.desc.mem && worker.coresFree >= driver.desc.cores) {
-          launchDriver(worker, driver)
-          waitingDrivers -= driver
-          launched = true
-        }
-        curPos = (curPos + 1) % numWorkersAlive
-      }
-    }
-
-    // Right now this is a very simple FIFO scheduler. We keep trying to fit in the first app
-    // in the queue, then the second app, etc.
-    if (spreadOutApps) {
-      // Try to spread out each app among all the nodes, until it has all its cores
-      for (app <- waitingApps if app.coresLeft > 0) {
-        val usableWorkers = workers.toArray.filter(_.state == WorkerState.ALIVE)
-          .filter(canUse(app, _)).sortBy(_.coresFree).reverse
-        val numUsable = usableWorkers.length
-        val assigned = new Array[Int](numUsable) // Number of cores to give on each node
-        var toAssign = math.min(app.coresLeft, usableWorkers.map(_.coresFree).sum)
-        var pos = 0
-        while (toAssign > 0) {
-          if (usableWorkers(pos).coresFree - assigned(pos) > 0) {
-            toAssign -= 1
-            assigned(pos) += 1
-          }
-          pos = (pos + 1) % numUsable
-        }
-        // Now that we've decided how many cores to give on each node, let's actually give them
-        for (pos <- 0 until numUsable) {
-          if (assigned(pos) > 0) {
-            val exec = app.addExecutor(usableWorkers(pos), assigned(pos))
-            launchExecutor(usableWorkers(pos), exec)
-            app.state = ApplicationState.RUNNING
-          }
-        }
-      }
-    } else {
-      // Pack each app into as few nodes as possible until we've assigned all its cores
-      for (worker <- workers if worker.coresFree > 0 && worker.state == WorkerState.ALIVE) {
-        for (app <- waitingApps if app.coresLeft > 0) {
-          if (canUse(app, worker)) {
-            val coresToUse = math.min(worker.coresFree, app.coresLeft)
-            if (coresToUse > 0) {
-              val exec = app.addExecutor(worker, coresToUse)
-              launchExecutor(worker, exec)
-              app.state = ApplicationState.RUNNING
-            }
-          }
-        }
-      }
-    }
   }
 
   def launchExecutor(worker: WorkerInfo, exec: ExecutorDesc) {
@@ -645,7 +567,7 @@ private[spark] class Master(
     driver.worker = None
     driver.state = DriverState.RELAUNCHING
     waitingDrivers += driver
-    schedule()
+    resourceScheduler.schedule()
   }
 
   def createApplication(desc: ApplicationDescription, driver: ActorRef): ApplicationInfo = {
@@ -704,7 +626,7 @@ private[spark] class Master(
         app.driver ! ApplicationRemoved(state.toString)
       }
       persistenceEngine.removeApplication(app)
-      schedule()
+      resourceScheduler.schedule()
 
       // Tell all workers that the application has finished, so they can clean up any app state.
       workers.foreach { w =>
@@ -836,7 +758,7 @@ private[spark] class Master(
         driver.state = finalState
         driver.exception = exception
         driver.worker.foreach(w => w.removeDriver(driver))
-        schedule()
+        resourceScheduler.schedule()
       case None =>
         logWarning(s"Asked to remove unknown driver: $driverId")
     }
