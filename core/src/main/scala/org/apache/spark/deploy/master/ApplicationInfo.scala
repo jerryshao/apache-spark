@@ -34,7 +34,8 @@ private[spark] class ApplicationInfo(
     val desc: ApplicationDescription,
     val submitDate: Date,
     val driver: ActorRef,
-    defaultCores: Int)
+    defaultCores: Int,
+    val queue: String = "default")
   extends Serializable {
 
   @transient var state: ApplicationState.Value = _

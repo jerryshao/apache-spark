@@ -1,17 +1,18 @@
 package org.apache.spark.deploy.master.scheduler
 
 import org.apache.spark.SparkConf
-import org.apache.spark.deploy.ApplicationDescription
-import org.apache.spark.deploy.master.scheduler.CapacityScheduler.RootQueue
-import org.apache.spark.deploy.master.{ApplicationInfo, Master}
+import org.apache.spark.deploy.master._
 
 import scala.collection.mutable
+import scala.util.Random
 
 object CapacityScheduler {
 
   sealed abstract class QueueNode(
       val queueName: String,
       val capacityPredef: Float) {
+
+    require(capacityPredef >= 0.0F && capacityPredef <= 1.0F)
 
     lazy val coresPredef: Int = (parent.map(_.coresPredef).get * capacityPredef).toInt
 
@@ -21,9 +22,9 @@ object CapacityScheduler {
 
     def usedCores: Int
 
-    def acquireCores(cores: Int): Int
+    private[scheduler] def acquireCores(cores: Int, withLimit: Boolean): Int
 
-    def releaseCores(cores: Int): Int
+    private[scheduler] def releaseCores(cores: Int): Int
 
     def availableCores = coresPredef - usedCores
 
@@ -43,11 +44,11 @@ object CapacityScheduler {
       cores
     }
 
-    def acquireCores(cores: Int): Int = {
+    private[scheduler] def acquireCores(cores: Int, withLimit: Boolean): Int = {
       var coresNeeded = cores
       var actualCoresAcquired = 0
       for (c <- children; if coresNeeded > 0) {
-        val coresGotten = c.acquireCores(coresNeeded)
+        val coresGotten = c.acquireCores(coresNeeded, withLimit)
         actualCoresAcquired += coresGotten
         coresNeeded -= coresGotten
       }
@@ -55,7 +56,7 @@ object CapacityScheduler {
       actualCoresAcquired
     }
 
-    def releaseCores(cores: Int): Int = {
+    private[scheduler] def releaseCores(cores: Int): Int = {
       var coresTobeReleased = cores
       var actualCoresReleased = 0
       for (c <- children; if coresTobeReleased > 0) {
@@ -68,23 +69,19 @@ object CapacityScheduler {
     }
   }
 
-  final class RootQueue extends ParentQueue("root", 1.0F) {
-    private var totalCores: Int = _
-
-    def setTotalCores(totalCores: Int): Unit = {
-      this.totalCores = totalCores
-    }
-
+  final class RootQueue(var totalCores: Int) extends ParentQueue("root", 1.0F) {
     override lazy val coresPredef = totalCores
   }
 
   final class LeafQueue(
       override val queueName: String,
       override val capacityPredef: Float,
-      parentNode: QueueNode)
+      parentNode: QueueNode,
+      softLimit: Float = 0.0F,
+      hardLimit: Float = 0.0F)
     extends QueueNode(queueName, capacityPredef) {
 
-    private val submittedApps = mutable.HashSet[ApplicationInfo]()
+    require(softLimit >= hardLimit, "soft limit must be larger than hard limit")
 
     private var coresUsed: Int = 0
 
@@ -92,26 +89,35 @@ object CapacityScheduler {
 
     override def usedCores: Int = coresUsed
 
-    def requestCoresForApp(app: ApplicationInfo): Int = {
-      val cores = acquireCores(app.coresLeft)
-      submittedApps += app
-      if (cores >= app.coresLeft) {
+    def requestCoresForSchedule(cores: Int): Int = {
+      val coresGotten = acquireCores(cores, false)
+      if (coresGotten >= cores) {
         cores
       } else {
-        cores + requestCoresFromParent(parentNode, app.coresLeft - cores)
+        cores + requestCoresFromParent(parentNode, cores - coresGotten)
       }
     }
 
-    def releaseCoresForApp(app: ApplicationInfo): Unit = {
-      submittedApps -= app
-      val coresReleased = releaseCores(app.coresGranted)
-      if (coresReleased < app.coresGranted) {
-        coresReleased + releaseCoresToParent(parentNode, app.coresGranted - coresReleased)
+    def releaseCoresForSchedule(cores: Int): Unit = {
+      val coresReleased = releaseCores(cores)
+      if (coresReleased < cores) {
+        coresReleased + releaseCoresToParent(parentNode, cores - coresReleased)
       }
     }
 
-    def acquireCores(cores: Int): Int = {
-      val reservedCores = availableCores
+    private[scheduler] def acquireCores(cores: Int, withLimit: Boolean): Int = {
+      val reservedCores = if (withLimit) {
+        if (usedCapacity < (1.0F - softLimit)) {
+          (coresPredef * (1.0F - softLimit - usedCapacity)).toInt
+        } else if (usedCapacity >= (1.0 - softLimit) && usedCapacity < (1.0 - hardLimit)) {
+          (coresPredef * (1.0F - hardLimit - usedCores)).toInt
+        } else {
+          0
+        }
+      } else {
+        availableCores
+      }
+
       if (reservedCores >= cores) {
         coresUsed += cores
         cores
@@ -121,7 +127,7 @@ object CapacityScheduler {
       }
     }
 
-    def releaseCores(cores: Int): Int = {
+    private[scheduler] def releaseCores(cores: Int): Int = {
       if (coresUsed - cores < 0) {
         val tmp = coresUsed
         coresUsed = 0
@@ -133,7 +139,7 @@ object CapacityScheduler {
     }
 
     private def requestCoresFromParent(parent: QueueNode, cores: Int): Int = {
-      val coresAcquired = parent.acquireCores(cores)
+      val coresAcquired = parent.acquireCores(cores, true)
       if (coresAcquired >= cores) {
         coresAcquired
       } else {
@@ -152,82 +158,72 @@ object CapacityScheduler {
       }
     }
   }
-
-
-  def main(args: Array[String]): Unit = {
-    val rootQueue = new RootQueue(100)
-    val queueA = new LeafQueue("QueueA", 0.3F, rootQueue)
-    val queueB = new ParentQueue("QueueB", 0.7F)
-    val queueC = new LeafQueue("QueueC", 0.4F, queueB)
-    val queueD = new LeafQueue("QueueD", 0.6F, queueB)
-
-    rootQueue.children = queueA :: queueB :: Nil
-
-    queueA.parent = Some(rootQueue)
-
-    queueB.parent = Some(rootQueue)
-    queueB.children = queueC :: queueD :: Nil
-
-    queueC.parent = Some(queueB)
-    queueD.parent = Some(queueB)
-
-    println("-----------queue path------------")
-    println(rootQueue.queuePath)
-    println(queueB.queuePath)
-    println(queueD.queuePath)
-
-    println("-----------queue predefined cores------------")
-    println(rootQueue.coresPredef)
-    println(queueA.coresPredef)
-    println(queueB.coresPredef)
-    println(queueC.coresPredef)
-    println(queueD.coresPredef)
-
-    val appDesc1 = new ApplicationDescription("aa", Some(40), 1024, null, null)
-    val appInfo1 = new ApplicationInfo(0L, "fdsa", appDesc1, null, null, Int.MaxValue)
-    val appInfo2 = new ApplicationInfo(0L, "fdsa", appDesc1, null, null, Int.MaxValue)
-    val cores = queueC.requestCoresForApp(appInfo1)
-    appInfo1.coresGranted = cores
-    appInfo2.coresGranted = queueD.requestCoresForApp(appInfo2)
-    println("-----------queue used cores after acquired------------")
-    println(rootQueue.usedCores)
-    println(queueA.usedCores)
-    println(queueB.usedCores)
-    println(queueC.usedCores)
-    println(queueD.usedCores)
-
-    println(rootQueue.usedCapacity)
-    println(queueA.usedCapacity)
-    println(queueB.usedCapacity)
-    println(queueC.usedCapacity)
-    println(queueD.usedCapacity)
-
-    println("-----------queue used cores after released------------")
-    println(s"${queueC.releaseCoresForApp(appInfo1)}")
-    println(rootQueue.usedCores)
-    println(queueA.usedCores)
-    println(queueB.usedCores)
-    println(queueC.usedCores)
-    println(queueD.usedCores)
-
-    println(rootQueue.usedCapacity)
-    println(queueA.usedCapacity)
-    println(queueB.usedCapacity)
-    println(queueC.usedCapacity)
-    println(queueD.usedCapacity)
-  }
 }
 
 private[spark] class CapacityScheduler(val master: Master) extends ResourceScheduler {
 
-  private lazy val totalCores = master.workers
-  private var rootQueue: RootQueue =
+  import CapacityScheduler._
+
+  private val rootQueue = new RootQueue(0)
+  private val capacityQueues = mutable.ArrayBuffer[QueueNode]()
+  capacityQueues += rootQueue
+  private val leafQueues = new mutable.HashMap[String, LeafQueue]()
+
+  private val queueNameConf = "spark.deploy.scheduler.capacity.%s.queues"
+  private val queueCapacityConf = "spark.deploy.scheduler.%s.capacity"
+  private val queueSoftLimitConf = "spark.deploy.scheduler.%s.capacity.softLimit"
+  private val queueHardLimitConf = "spark.deploy.scheduler.%s.capacity.hardLimit"
 
   override def initialize(conf: SparkConf): Unit = {
-    conf.get("spark.deploy.")
+    val queues = new mutable.Queue[String]()
+    if (conf.contains(queueNameConf.format(rootQueue.queueName))) {
+      queues.enqueue(rootQueue.queueName)
+    } else {
+      val defaultQueue = new LeafQueue("default", 1.0F, rootQueue)
+      capacityQueues += defaultQueue
+    }
 
+    while (queues.nonEmpty) {
+      val parentName = queues.dequeue()
+      val queueNames = conf.get(queueNameConf.format(parentName)).split(",")
+
+      for (name <- queueNames) {
+        val capacity =
+          conf.getInt(queueCapacityConf.format(name), 100 / queueNames.length) / 100F
+        val parentQueue = capacityQueues.find(_.queueName == parentName)
+
+        val a = if (conf.contains(queueNameConf.format(name))) {
+         val queue = new ParentQueue(name, capacity)
+          queue.parent = parentQueue
+          parentQueue.foreach(p => p.children = p.children ++ (queue :: Nil))
+          queues.enqueue(name)
+          queue
+        } else {
+          val softLimit = conf.getInt(queueSoftLimitConf.format(name), 0) / 100F
+          val hardLimit = conf.getInt(queueHardLimitConf.format(name), 0) / 100F
+
+          val queue = new LeafQueue(name, capacity, parentQueue.get, softLimit, hardLimit)
+          parentQueue.foreach(p => p.children = p.children ++ (queue :: Nil))
+          leafQueues.put(name, queue)
+          queue
+        }
+        capacityQueues += a
+      }
+    }
   }
 
-  override def schedule(): Unit = ???
+  def enoughCores(queue: String, cores: Int): Boolean =
+    leafQueues(queue).availableCores >= cores
 
+  def requestCores(queue: String, cores: Int): Int = {
+    leafQueues(queue).requestCoresForSchedule(cores)
+  }
+
+  def releaseCores(queue: String, cores: Int): Unit = {
+    leafQueues(queue).releaseCoresForSchedule(cores)
+  }
+
+  def setTotalCores(cores: Int): Unit = {
+    rootQueue.totalCores = cores
+  }
 }

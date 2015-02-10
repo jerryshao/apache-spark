@@ -42,7 +42,7 @@ import org.apache.spark.deploy.DeployMessages._
 import org.apache.spark.deploy.history.HistoryServer
 import org.apache.spark.deploy.master.DriverState.DriverState
 import org.apache.spark.deploy.master.MasterMessages._
-import org.apache.spark.deploy.master.scheduler.FIFOScheduler
+import org.apache.spark.deploy.master.scheduler.{UnlimitedResourceScheduler, FIFOScheduler}
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.scheduler.{EventLoggingListener, ReplayListenerBus}
@@ -88,7 +88,7 @@ private[spark] class Master(
 
   Utils.checkHost(host, "Expected hostname")
 
-  val resourceScheduler = new FIFOScheduler(this)
+  val resourceScheduler = new UnlimitedResourceScheduler(this)
 
   val masterMetricsSystem = MetricsSystem.createMetricsSystem("master", conf, securityMgr)
   val applicationMetricsSystem = MetricsSystem.createMetricsSystem("applications", conf,
@@ -231,7 +231,7 @@ private[spark] class Master(
         if (registerWorker(worker)) {
           persistenceEngine.addWorker(worker)
           sender ! RegisteredWorker(masterUrl, masterWebUiUrl)
-          resourceScheduler.schedule()
+          schedule()
         } else {
           val workerAddress = worker.actor.path.address
           logWarning("Worker registration failed. Attempted to re-register worker at same " +
@@ -252,7 +252,7 @@ private[spark] class Master(
         persistenceEngine.addDriver(driver)
         waitingDrivers += driver
         drivers.add(driver)
-        resourceScheduler.schedule()
+        schedule()
 
         // TODO: It might be good to instead have the submission client poll the master to determine
         //       the current status of the driver. For now it's simply "fire and forget".
@@ -281,6 +281,8 @@ private[spark] class Master(
               d.worker.foreach { w =>
                 w.actor ! KillDriver(driverId)
               }
+
+              resourceScheduler.releaseResourceForDriver(d)
             }
             // TODO: It would be nice for this to be a synchronous response
             val msg = s"Kill request for $driverId submitted"
@@ -314,7 +316,7 @@ private[spark] class Master(
         logInfo("Registered app " + description.name + " with ID " + app.id)
         persistenceEngine.addApplication(app)
         sender ! RegisteredApplication(app.id, masterUrl)
-        resourceScheduler.schedule()
+        schedule()
       }
     }
 
@@ -329,6 +331,7 @@ private[spark] class Master(
           if (ExecutorState.isFinished(state)) {
             // Remove this executor from the worker and app
             logInfo(s"Removing executor ${exec.fullId} because it is $state")
+            resourceScheduler.releaseCores(appInfo.queue, exec.cores)
             appInfo.removeExecutor(exec)
             exec.worker.removeExecutor(exec)
 
@@ -336,7 +339,7 @@ private[spark] class Master(
             // Only retry certain number of times so we don't go into an infinite loop.
             if (!normalExit) {
               if (appInfo.incrementRetryCount() < ApplicationState.MAX_NUM_RETRY) {
-                resourceScheduler.schedule()
+                schedule()
               } else {
                 val execs = appInfo.executors.values
                 if (!execs.exists(_.state == ExecutorState.RUNNING)) {
@@ -499,8 +502,41 @@ private[spark] class Master(
     }
 
     state = RecoveryState.ALIVE
-    resourceScheduler.schedule()
+    schedule()
     logInfo("Recovery complete - resuming operations!")
+  }
+
+  /**
+   * Schedule the currently available resources among waiting apps. This method will be called
+   * every time a new app joins or resource availability changes.
+   */
+  private def schedule() {
+    if (state != RecoveryState.ALIVE) { return }
+
+    resourceScheduler.setTotalCores(workers.filter(_.state == WorkerState.ALIVE).map(_.cores).sum)
+
+    for (driver <- waitingDrivers.toList) { // iterate over a copy of waitingDrivers
+    // We assign workers to each waiting driver in a round-robin fashion. For each driver, we
+    // start from the last worker that was assigned a driver, and continue onwards until we have
+    // explored all alive workers.
+      resourceScheduler.requestResourcesForDriver(driver).foreach { case (worker, cores) =>
+        launchDriver(worker, driver)
+        waitingDrivers -= driver
+      }
+    }
+
+    // Right now this is a very simple FIFO scheduler. We keep trying to fit in the first app
+    // in the queue, then the second app, etc.
+    for (app <- waitingApps if app.coresLeft > 0) {
+      val resources = resourceScheduler.requestResourcesForApp(app)
+      resources.foreach { case (worker, cores) =>
+        if (cores > 0) {
+          val exec = app.addExecutor(worker, cores)
+          launchExecutor(worker, exec)
+          app.state = ApplicationState.RUNNING
+        }
+      }
+    }
   }
 
   def launchExecutor(worker: WorkerInfo, exec: ExecutorDesc) {
@@ -567,7 +603,7 @@ private[spark] class Master(
     driver.worker = None
     driver.state = DriverState.RELAUNCHING
     waitingDrivers += driver
-    resourceScheduler.schedule()
+    schedule()
   }
 
   def createApplication(desc: ApplicationDescription, driver: ActorRef): ApplicationInfo = {
@@ -616,6 +652,8 @@ private[spark] class Master(
       // If application events are logged, use them to rebuild the UI
       rebuildSparkUI(app)
 
+      resourceScheduler.releaseResourcesForApp(app)
+
       for (exec <- app.executors.values) {
         exec.worker.removeExecutor(exec)
         exec.worker.actor ! KillExecutor(masterUrl, exec.application.id, exec.id)
@@ -626,7 +664,7 @@ private[spark] class Master(
         app.driver ! ApplicationRemoved(state.toString)
       }
       persistenceEngine.removeApplication(app)
-      resourceScheduler.schedule()
+      schedule()
 
       // Tell all workers that the application has finished, so they can clean up any app state.
       workers.foreach { w =>
@@ -748,6 +786,9 @@ private[spark] class Master(
     drivers.find(d => d.id == driverId) match {
       case Some(driver) =>
         logInfo(s"Removing driver: $driverId")
+
+        resourceScheduler.releaseResourceForDriver(driver)
+
         drivers -= driver
         if (completedDrivers.size >= RETAINED_DRIVERS) {
           val toRemove = math.max(RETAINED_DRIVERS / 10, 1)
@@ -758,7 +799,7 @@ private[spark] class Master(
         driver.state = finalState
         driver.exception = exception
         driver.worker.foreach(w => w.removeDriver(driver))
-        resourceScheduler.schedule()
+        schedule()
       case None =>
         logWarning(s"Asked to remove unknown driver: $driverId")
     }

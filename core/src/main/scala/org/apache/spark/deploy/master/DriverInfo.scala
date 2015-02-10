@@ -27,7 +27,8 @@ private[spark] class DriverInfo(
     val startTime: Long,
     val id: String,
     val desc: DriverDescription,
-    val submitDate: Date)
+    val submitDate: Date,
+    val queue: String = "default")
   extends Serializable {
 
   @transient var state: DriverState.Value = DriverState.SUBMITTED
