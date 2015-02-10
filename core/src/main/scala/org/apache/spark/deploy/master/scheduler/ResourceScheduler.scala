@@ -17,11 +17,11 @@
 
 package org.apache.spark.deploy.master.scheduler
 
-import org.apache.spark.SparkConf
-import org.apache.spark.deploy.master._
-
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
+
+import org.apache.spark.SparkConf
+import org.apache.spark.deploy.master._
 
 private[spark] abstract class ResourceScheduler {
 
@@ -31,9 +31,9 @@ private[spark] abstract class ResourceScheduler {
 
   def enoughCores(queue: String, cores: Int): Boolean
 
-  def requestCores(queue: String, cores: Int): Int
+  protected def requestCores(queue: String, cores: Int): Int
 
-  def releaseCores(queue: String, cores: Int): Unit
+  protected def releaseCores(queue: String, cores: Int): Unit
 
   def setTotalCores(cores: Int): Unit
 
@@ -102,8 +102,12 @@ private[spark] abstract class ResourceScheduler {
     None
   }
 
-  def releaseResourceForDriver(driver: DriverInfo): Unit = {
+  def releaseResourcesForDriver(driver: DriverInfo): Unit = {
     releaseCores(driver.queue, driver.desc.cores)
+  }
+
+  def releaseExecutorResources(exec: ExecutorDesc): Unit = {
+    releaseCores(exec.application.queue, exec.cores)
   }
 
   /**
@@ -122,9 +126,9 @@ private[spark] class UnlimitedResourceScheduler(val master: Master) extends Reso
 
   def enoughCores(queue: String, cores: Int): Boolean = true
 
-  def requestCores(queue: String, cores: Int): Int = cores
+  protected def requestCores(queue: String, cores: Int): Int = cores
 
-  def releaseCores(queue: String, cores: Int): Unit = { }
+  protected def releaseCores(queue: String, cores: Int): Unit = { }
 
   def setTotalCores(cores: Int): Unit = { }
 }

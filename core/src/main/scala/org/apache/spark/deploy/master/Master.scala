@@ -42,7 +42,7 @@ import org.apache.spark.deploy.DeployMessages._
 import org.apache.spark.deploy.history.HistoryServer
 import org.apache.spark.deploy.master.DriverState.DriverState
 import org.apache.spark.deploy.master.MasterMessages._
-import org.apache.spark.deploy.master.scheduler.{UnlimitedResourceScheduler, FIFOScheduler}
+import org.apache.spark.deploy.master.scheduler.UnlimitedResourceScheduler
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.scheduler.{EventLoggingListener, ReplayListenerBus}
@@ -282,7 +282,7 @@ private[spark] class Master(
                 w.actor ! KillDriver(driverId)
               }
 
-              resourceScheduler.releaseResourceForDriver(d)
+              resourceScheduler.releaseResourcesForDriver(d)
             }
             // TODO: It would be nice for this to be a synchronous response
             val msg = s"Kill request for $driverId submitted"
@@ -331,7 +331,7 @@ private[spark] class Master(
           if (ExecutorState.isFinished(state)) {
             // Remove this executor from the worker and app
             logInfo(s"Removing executor ${exec.fullId} because it is $state")
-            resourceScheduler.releaseCores(appInfo.queue, exec.cores)
+            resourceScheduler.releaseExecutorResources(exec)
             appInfo.removeExecutor(exec)
             exec.worker.removeExecutor(exec)
 
@@ -787,7 +787,7 @@ private[spark] class Master(
       case Some(driver) =>
         logInfo(s"Removing driver: $driverId")
 
-        resourceScheduler.releaseResourceForDriver(driver)
+        resourceScheduler.releaseResourcesForDriver(driver)
 
         drivers -= driver
         if (completedDrivers.size >= RETAINED_DRIVERS) {
