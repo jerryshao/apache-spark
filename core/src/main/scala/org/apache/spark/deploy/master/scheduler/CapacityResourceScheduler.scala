@@ -22,7 +22,7 @@ import scala.collection.mutable
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.master._
 
-object CapacityScheduler {
+object CapacityResourceScheduler {
 
   sealed abstract class QueueNode(
       val queueName: String,
@@ -105,7 +105,7 @@ object CapacityScheduler {
 
     override def usedCores: Int = coresUsed
 
-    def requestCoresForSchedule(cores: Int): Int = {
+    def requestCoresForScheduling(cores: Int): Int = {
       val coresGotten = acquireCores(cores, false)
       if (coresGotten >= cores) {
         cores
@@ -114,7 +114,7 @@ object CapacityScheduler {
       }
     }
 
-    def releaseCoresForSchedule(cores: Int): Unit = {
+    def releaseCoresForScheduling(cores: Int): Unit = {
       val coresReleased = releaseCores(cores)
       if (coresReleased < cores) {
         coresReleased + releaseCoresToParent(parentNode, cores - coresReleased)
@@ -159,7 +159,7 @@ object CapacityScheduler {
       if (coresAcquired >= cores) {
         coresAcquired
       } else {
-        coresAcquired + parent.parent.map { p => requestCoresFromParent(p, cores - coresAcquired)}
+        coresAcquired + parent.parent.map(requestCoresFromParent(_, cores - coresAcquired))
           .getOrElse(0)
       }
     }
@@ -176,9 +176,9 @@ object CapacityScheduler {
   }
 }
 
-private[spark] class CapacityScheduler(val master: Master) extends ResourceScheduler {
+private[spark] class CapacityResourceScheduler(val master: Master) extends ResourceScheduler {
 
-  import CapacityScheduler._
+  import CapacityResourceScheduler._
 
   private val rootQueue = new RootQueue(0)
   private val capacityQueues = mutable.ArrayBuffer[QueueNode]()
@@ -232,11 +232,11 @@ private[spark] class CapacityScheduler(val master: Master) extends ResourceSched
     leafQueues(queue).availableCores >= cores
 
   protected def requestCores(queue: String, cores: Int): Int = {
-    leafQueues(queue).requestCoresForSchedule(cores)
+    leafQueues(queue).requestCoresForScheduling(cores)
   }
 
   protected def releaseCores(queue: String, cores: Int): Unit = {
-    leafQueues(queue).releaseCoresForSchedule(cores)
+    leafQueues(queue).releaseCoresForScheduling(cores)
   }
 
   def setTotalCores(cores: Int): Unit = {
