@@ -96,7 +96,7 @@ ________________________________________________________________________________
 
     @staticmethod
     def createDirectStream(ssc, topics, kafkaParams={},
-                     keyDecoder=utf8_decoder, valueDecoder=utf8_decoder):
+                           keyDecoder=utf8_decoder, valueDecoder=utf8_decoder):
         """
         Create an input stream that directly pulls messages from a Kafka Broker.
 
@@ -118,7 +118,7 @@ ________________________________________________________________________________
             array = KafkaUtils._getClassByName(ssc, "[B")
             decoder = KafkaUtils._getClassByName(ssc, "kafka.serializer.DefaultDecoder")
             jstream = ssc._jvm.KafkaUtils.createDirectStream(ssc._jssc, array, array, decoder,
-                                                            decoder, jparam, jtopics)
+                                                             decoder, jparam, jtopics)
         except Py4JError, e:
             # TODO: use --jar once it also work on driver
             if not e.message or 'call a package' in e.message:
