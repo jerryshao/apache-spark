@@ -196,7 +196,7 @@ class DirectKafkaInputDStream[
         }
       }
 
-      offsetMap.dropWhile(_._1 <= batchCompleted.batchInfo.batchTime)
+      offsetMap --= offsetMap.filter(_._1 <= batchCompleted.batchInfo.batchTime).keys
     }
   }
 }
