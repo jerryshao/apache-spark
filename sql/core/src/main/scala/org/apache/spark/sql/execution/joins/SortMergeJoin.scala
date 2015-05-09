@@ -59,12 +59,13 @@ case class SortMergeJoin(
       throw new Exception(s"SortMergeJoin should not take $x as the JoinType")
   }
 
-  override def outputPartitioning: Partitioning = joinType match {
-    case FullOuter =>
-      // when doing Full Outer join, NULL rows from both sides are not so partitioned.
-      UnknownPartitioning(streamed.outputPartitioning.numPartitions)
-    case _ => streamed.outputPartitioning
-  }
+  override def outputPartitioning: Partitioning = streamed.outputPartitioning
+//    joinType match {
+//    case FullOuter =>
+//      // when doing Full Outer join, NULL rows from both sides are not so partitioned.
+//      UnknownPartitioning(streamed.outputPartitioning.numPartitions)
+//    case _ => streamed.outputPartitioning
+//  }
 
   override def requiredChildDistribution: Seq[Distribution] =
     ClusteredDistribution(leftKeys) :: ClusteredDistribution(rightKeys) :: Nil
@@ -94,7 +95,8 @@ case class SortMergeJoin(
   private def requiredOrders(keys: Seq[Expression]): Seq[SortOrder] =
     keys.map(SortOrder(_, Ascending))
 
-  override def execute(): RDD[Row] = {
+
+  override def doExecute(): RDD[Row] = {
     val streamResults = streamed.execute().map(_.copy())
     val bufferResults = buffered.execute().map(_.copy())
 
