@@ -52,7 +52,7 @@ case class HashOuterJoin(
   }
 
   override def requiredChildDistribution: Seq[ClusteredDistribution] =
-    ClusteredDistribution(leftKeys) :: ClusteredDistribution(rightKeys) :: Nil
+    ClusteredDistribution(leftKeys, false) :: ClusteredDistribution(rightKeys, false) :: Nil
 
   override def output: Seq[Attribute] = {
     joinType match {
