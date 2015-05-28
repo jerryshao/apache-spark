@@ -203,7 +203,7 @@ private[spark] class TieredDiskMerger[K, C](
           var success = false
 
           try {
-            partialMergedItr.foreach(writer.write)
+            partialMergedItr.foreach { case x => writer.write(x._1, x._2) }
             success = true
           } finally {
             if (!success) {

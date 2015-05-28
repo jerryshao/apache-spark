@@ -113,7 +113,7 @@ case class BroadcastHashOuterJoin(
     hashTable
   }
 
-  override def execute() = {
+  override def doExecute() = {
     val input: Array[Row] = broadcastPlan.execute().map(_.copy()).collect()
     val hashed = buildHashTable(input.iterator, BroadcastSideKeyGenerator)
     val broadcastHashTable = sparkContext.broadcast(hashed)
