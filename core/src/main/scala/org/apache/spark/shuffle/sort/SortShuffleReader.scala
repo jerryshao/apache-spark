@@ -260,7 +260,7 @@ private[spark] class SortShuffleReader[K, C](
     var success = false
 
     try {
-      partialMergedItr.foreach { case x => writer.write(x._1, x._2) }
+      partialMergedItr.foreach { x => writer.write(x._1, x._2) }
       success = true
     } finally {
       if (!success) {
