@@ -81,7 +81,7 @@ private[spark] class ClientArguments(args: Array[String], sparkConf: SparkConf) 
       .orNull
     // If dynamic allocation is enabled, start at the configured initial number of executors.
     // Default to minExecutors if no initialExecutors is set.
-    numExecutors = YarnSparkHadoopUtil.getInitialTargetExecutorNumber(sparkConf, numExecutors)
+    numExecutors = YarnSparkHadoopUtil.getInitialTargetExecutorNumber(sparkConf)
     principal = Option(principal)
       .orElse(sparkConf.getOption("spark.yarn.principal"))
       .orNull
@@ -181,6 +181,10 @@ private[spark] class ClientArguments(args: Array[String], sparkConf: SparkConf) 
             println("--num-workers is deprecated. Use --num-executors instead.")
           }
           numExecutors = value
+          // Maintain backwards-compatibility
+          if (!isDynamicAllocationEnabled) {
+            sparkConf.set("spark.executor.instances", numExecutors.toString)
+          }
           args = tail
 
         case ("--worker-memory" | "--executor-memory") :: MemoryParam(value) :: tail =>
