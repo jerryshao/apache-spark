@@ -71,7 +71,7 @@ class Job(val time: Time, func: () => _) {
       throw new IllegalStateException("Cannot call setOutputOpId more than once")
     }
     isSet = true
-    _id = s"streaming job $time.$outputOpId"
+    _id = s"streaming job ${time.milliseconds}.$outputOpId"
     _outputOpId = outputOpId
   }
 
