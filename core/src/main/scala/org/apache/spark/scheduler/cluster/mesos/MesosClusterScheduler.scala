@@ -367,7 +367,7 @@ private[spark] class MesosClusterScheduler(
       ""
     }
     val envBuilder = Environment.newBuilder()
-    desc.command.environment.foreach { case (k, v) =>
+    desc.command.environment.filterNot(_._1 == "SPARK_HOME").foreach { case (k, v) =>
       envBuilder.addVariables(Variable.newBuilder().setName(k).setValue(v).build())
     }
     // Pass all spark properties to executor.
