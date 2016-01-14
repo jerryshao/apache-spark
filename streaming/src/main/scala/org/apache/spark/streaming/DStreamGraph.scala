@@ -23,7 +23,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.Logging
 import org.apache.spark.streaming.dstream.{DStream, InputDStream, ReceiverInputDStream}
-import org.apache.spark.streaming.scheduler.Job
+import org.apache.spark.streaming.scheduler.{ReceiverInfo, Job}
 import org.apache.spark.util.Utils
 
 final private[streaming] class DStreamGraph extends Serializable with Logging {
@@ -86,6 +86,13 @@ final private[streaming] class DStreamGraph extends Serializable with Logging {
     this.synchronized {
       inputStream.setGraph(this)
       inputStreams += inputStream
+    }
+
+    if (inputStream.isInstanceOf[ReceiverInputDStream[_]]) {
+      val receiverInputDStream = inputStream.asInstanceOf[ReceiverInputDStream[_]]
+      val receiverInfo = ReceiverInfo(
+      )
+
     }
   }
 

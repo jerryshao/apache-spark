@@ -50,6 +50,9 @@ class JobScheduler(val ssc: StreamingContext) extends Logging {
   private val jobGenerator = new JobGenerator(this)
   val clock = jobGenerator.clock
   val listenerBus = new StreamingListenerBus()
+  // Start the listenerBus immediately, since we have some events should be posted before
+  // streaming application is started.
+  listenerBus.start(ssc.sparkContext)
 
   // These two are created only when scheduler starts.
   // eventLoop not being null means the scheduler has been started and not stopped
@@ -76,7 +79,6 @@ class JobScheduler(val ssc: StreamingContext) extends Logging {
       rateController <- inputDStream.rateController
     } ssc.addStreamingListener(rateController)
 
-    listenerBus.start(ssc.sparkContext)
     receiverTracker = new ReceiverTracker(ssc)
     inputInfoTracker = new InputInfoTracker(ssc)
     receiverTracker.start()

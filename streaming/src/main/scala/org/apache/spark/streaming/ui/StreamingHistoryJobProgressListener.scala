@@ -17,28 +17,6 @@
 
 package org.apache.spark.streaming.ui
 
-import org.apache.spark.Logging
-import org.apache.spark.ui.{SparkUI, SparkUITab}
+class StreamingHistoryJobProgressListener extends StreamingJobProgressListener {
 
-/**
- * Spark Web UI tab that shows statistics of a streaming job.
- * This assumes the given SparkContext has enabled its SparkUI.
- */
-private[spark] class StreamingTab(val listener: StreamingJobProgressListener, val sparkUI: SparkUI)
-  extends SparkUITab(sparkUI, "streaming") with Logging {
-
-  private val STATIC_RESOURCE_DIR = "org/apache/spark/streaming/ui/static"
-
-  attachPage(new StreamingPage(this))
-  attachPage(new BatchPage(this))
-
-  def attach() {
-    sparkUI.attachTab(this)
-    sparkUI.addStaticHandler(STATIC_RESOURCE_DIR, "/static/streaming")
-  }
-
-  def detach() {
-    sparkUI.detachTab(this)
-    sparkUI.removeStaticHandler("/static/streaming")
-  }
 }

@@ -19,19 +19,21 @@ package org.apache.spark.streaming.ui
 
 import java.util.{LinkedHashMap, Map => JMap, Properties}
 
+
 import scala.collection.mutable.{ArrayBuffer, HashMap, Queue, SynchronizedBuffer}
 
+import org.apache.spark.SparkConf
 import org.apache.spark.scheduler._
-import org.apache.spark.streaming.{StreamingContext, Time}
+import org.apache.spark.streaming.Time
 import org.apache.spark.streaming.scheduler._
 
-private[streaming] class StreamingJobProgressListener(ssc: StreamingContext)
+private[streaming] class StreamingJobProgressListener(conf: SparkConf)
   extends StreamingListener with SparkListener {
 
   private val waitingBatchUIData = new HashMap[Time, BatchUIData]
   private val runningBatchUIData = new HashMap[Time, BatchUIData]
   private val completedBatchUIData = new Queue[BatchUIData]
-  private val batchUIDataLimit = ssc.conf.getInt("spark.streaming.ui.retainedBatches", 1000)
+  private val batchUIDataLimit = conf.getInt("spark.streaming.ui.retainedBatches", 1000)
   private var totalCompletedBatches = 0L
   private var totalReceivedRecords = 0L
   private var totalProcessedRecords = 0L

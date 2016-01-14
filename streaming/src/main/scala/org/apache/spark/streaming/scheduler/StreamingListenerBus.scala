@@ -31,6 +31,12 @@ private[spark] class StreamingListenerBus
 
   override def onPostEvent(listener: StreamingListener, event: StreamingListenerEvent): Unit = {
     event match {
+      case streamingAppStarted: StreamingListenerApplicationStart =>
+        listener.onStreamingApplicationStarted(streamingAppStarted)
+      case streamingAppEnd: StreamingListenerApplicationEnd =>
+        listener.onStreamingApplicationEnd(streamingAppEnd)
+      case receiverRegistered: StreamingListenerReceiverRegistered =>
+        listener.onReceiverRegistered(receiverRegistered)
       case receiverStarted: StreamingListenerReceiverStarted =>
         listener.onReceiverStarted(receiverStarted)
       case receiverError: StreamingListenerReceiverError =>

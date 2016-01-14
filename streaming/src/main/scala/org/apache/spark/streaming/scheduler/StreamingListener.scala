@@ -20,6 +20,7 @@ package org.apache.spark.streaming.scheduler
 import scala.collection.mutable.Queue
 
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.scheduler.SparkListenerEvent
 import org.apache.spark.util.Distribution
 
 /**
@@ -27,7 +28,15 @@ import org.apache.spark.util.Distribution
  * Base trait for events related to StreamingListener
  */
 @DeveloperApi
-sealed trait StreamingListenerEvent
+sealed trait StreamingListenerEvent extends SparkListenerEvent
+
+@DeveloperApi
+case class StreamingListenerApplicationStart(
+    batchDuration: Long,
+    startTime: Long) extends StreamingListenerEvent
+
+@DeveloperApi
+case class StreamingListenerApplicationEnd(endTime: Long) extends StreamingListenerEvent
 
 @DeveloperApi
 case class StreamingListenerBatchSubmitted(batchInfo: BatchInfo) extends StreamingListenerEvent
@@ -44,6 +53,10 @@ case class StreamingListenerOutputOperationStarted(outputOperationInfo: OutputOp
 
 @DeveloperApi
 case class StreamingListenerOutputOperationCompleted(outputOperationInfo: OutputOperationInfo)
+  extends StreamingListenerEvent
+
+@DeveloperApi
+case class StreamingListenerReceiverRegistered(receiverInfo: ReceiverInfo)
   extends StreamingListenerEvent
 
 @DeveloperApi
@@ -65,6 +78,15 @@ case class StreamingListenerReceiverStopped(receiverInfo: ReceiverInfo)
  */
 @DeveloperApi
 trait StreamingListener {
+
+  /** Called when streaming application is started */
+  def onStreamingApplicationStarted(streamingAppStarted: StreamingListenerApplicationStart) { }
+
+  /** Called when streaming application is end */
+  def onStreamingApplicationEnd(streamingAppEnd: StreamingListenerApplicationEnd) { }
+
+  /** Called when a receiver is registered */
+  def onReceiverRegistered(receiverRegistered: StreamingListenerReceiverRegistered) { }
 
   /** Called when a receiver has been started */
   def onReceiverStarted(receiverStarted: StreamingListenerReceiverStarted) { }
