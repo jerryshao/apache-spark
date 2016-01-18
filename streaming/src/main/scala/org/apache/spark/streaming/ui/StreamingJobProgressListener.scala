@@ -38,6 +38,7 @@ private[streaming] class StreamingJobProgressListener(conf: SparkConf)
   private var totalReceivedRecords = 0L
   private var totalProcessedRecords = 0L
   private val receiverInfos = new HashMap[Int, ReceiverInfo]
+  private val inputStreamInfos = new HashMap[Int, (String, Boolean)]
 
   // Because onJobStart and onBatchXXX messages are processed in different threads,
   // we may not be able to get the corresponding BatchUIData when receiving onJobStart. So here we
@@ -64,7 +65,19 @@ private[streaming] class StreamingJobProgressListener(conf: SparkConf)
     }
 
 
-  val batchDuration = ssc.graph.batchDuration.milliseconds
+  @volatile var batchDuration: Long = -1
+
+  override def onStreamingApplicationStarted(
+      streamingAppStarted: StreamingListenerApplicationStart): Unit = {
+    batchDuration = streamingAppStarted.batchDuration
+  }
+
+  override def onInputStreamRegistered(
+      inputStreamRegistered: StreamingListenerInputStreamRegistered): Unit = synchronized {
+    inputStreamInfos(inputStreamRegistered.id) =
+      (inputStreamRegistered.name, inputStreamRegistered.isReceiver)
+
+  }
 
   override def onReceiverStarted(receiverStarted: StreamingListenerReceiverStarted) {
     synchronized {
@@ -162,8 +175,8 @@ private[streaming] class StreamingJobProgressListener(conf: SparkConf)
     receiverInfos.count(_._2.active)
   }
 
-  def numInactiveReceivers: Int = {
-    ssc.graph.getReceiverInputStreams().size - numActiveReceivers
+  def numInactiveReceivers: Int = synchronized {
+    inputStreamInfos.size - numActiveReceivers
   }
 
   def numTotalCompletedBatches: Long = synchronized {
@@ -194,14 +207,16 @@ private[streaming] class StreamingJobProgressListener(conf: SparkConf)
     completedBatchUIData.toSeq
   }
 
-  def streamName(streamId: Int): Option[String] = {
-    ssc.graph.getInputStreamName(streamId)
+  def streamName(streamId: Int): Option[String] = synchronized {
+    inputStreamInfos.get(streamId).map(_._1)
   }
 
   /**
    * Return all InputDStream Ids
    */
-  def streamIds: Seq[Int] = ssc.graph.getInputStreams().map(_.id)
+  def streamIds: Seq[Int] = synchronized {
+    inputStreamInfos.keys.toSeq
+  }
 
   /**
    * Return all of the event rates for each InputDStream in each batch. The key of the return value
