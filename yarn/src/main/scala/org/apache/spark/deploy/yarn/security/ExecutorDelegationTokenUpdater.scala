@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.spark.deploy.yarn.token
+package org.apache.spark.deploy.yarn.security
 
 import java.util.concurrent.{Executors, TimeUnit}
 
@@ -27,7 +27,7 @@ import org.apache.hadoop.security.{Credentials, UserGroupInformation}
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.deploy.yarn.config._
-import org.apache.spark.deploy.yarn.token.ConfigurableTokenManager._
+import org.apache.spark.deploy.yarn.security.ConfigurableTokenManager._
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.{ThreadUtils, Utils}
 

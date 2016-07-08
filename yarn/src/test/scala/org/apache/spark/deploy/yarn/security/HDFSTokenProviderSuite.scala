@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.yarn.token
+package org.apache.spark.deploy.yarn.security
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path

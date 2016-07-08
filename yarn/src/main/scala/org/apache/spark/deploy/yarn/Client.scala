@@ -50,7 +50,7 @@ import org.apache.hadoop.yarn.util.Records
 import org.apache.spark.{SecurityManager, SparkConf, SparkContext, SparkException}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.deploy.yarn.config._
-import org.apache.spark.deploy.yarn.token.ConfigurableTokenManager._
+import org.apache.spark.deploy.yarn.security.ConfigurableTokenManager._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 import org.apache.spark.launcher.{LauncherBackend, SparkAppHandle, YarnCommandBuilderUtils}
@@ -390,9 +390,8 @@ private[spark] class Client(
     // Upload Spark and the application JAR to the remote file system if necessary,
     // and add them as local resources to the application master.
     val fs = destDir.getFileSystem(hadoopConf)
-    hdfsTokenProvider(sparkConf).setNameNodesToAccess(sparkConf, Set(destDir))
-    hdfsTokenProvider(sparkConf).setTokenRenewer(null)
-    configurableTokenManager(sparkConf).obtainTokens(hadoopConf, credentials)
+    val credsArray = configurableTokenManager(sparkConf).obtainCredentials(hadoopConf)
+    credsArray.foreach(c => credentials.mergeAll(c._1))
     // Used to keep track of URIs added to the distributed cache. If the same URI is added
     // multiple times, YARN will fail to launch containers for the app with an internal
     // error.
@@ -731,11 +730,6 @@ private[spark] class Client(
       val credentialsFile = "credentials-" + UUID.randomUUID().toString
       sparkConf.set(CREDENTIALS_FILE_PATH, new Path(stagingDirPath, credentialsFile).toString)
       logInfo(s"Credentials file set to: $credentialsFile")
-      hdfsTokenProvider(sparkConf).setNameNodesToAccess(sparkConf, Set(stagingDirPath))
-      sparkConf.get(PRINCIPAL).foreach(hdfsTokenProvider(sparkConf).setTokenRenewer(_))
-      val minTokenRenewalInterval =
-        configurableTokenManager(sparkConf).getSmallestTokenRenewalInterval(hadoopConf)
-      sparkConf.set(TOKEN_RENEWAL_INTERVAL, minTokenRenewalInterval)
     }
 
     // Pick up any environment variables for the AM provided through spark.yarn.appMasterEnv.*

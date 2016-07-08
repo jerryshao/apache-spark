@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.yarn.token
+package org.apache.spark.deploy.yarn.security
 
 import java.lang.reflect.UndeclaredThrowableException
 import java.security.PrivilegedExceptionAction
@@ -33,15 +33,14 @@ import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
-private[yarn] class HiveTokenProvider extends ServiceTokenProvider with Logging {
+private[yarn] class HiveCredentialProvider(sparkConf: SparkConf)
+    extends ServiceCredentialProvider with Logging {
 
   override def serviceName: String = "hive"
 
-  override def obtainTokensFromService(
-      sparkConf: SparkConf,
-      serviceConf: Configuration,
-      creds: Credentials): Array[Token[_]] = {
+  override def obtainCredentials(hadoopConf: Configuration): (Credentials, Option[Long]) = {
     val mirror = universe.runtimeMirror(Utils.getContextOrSparkClassLoader)
+    val creds = new Credentials()
 
     // the hive configuration class is a subclass of Hadoop Configuration, so can be cast down
     // to a Configuration and used without reflection
@@ -50,7 +49,7 @@ private[yarn] class HiveTokenProvider extends ServiceTokenProvider with Logging 
     // in the hive config.
     val ctor = hiveConfClass.getDeclaredConstructor(classOf[Configuration],
       classOf[Object].getClass)
-    val hiveConf = ctor.newInstance(serviceConf, hiveConfClass).asInstanceOf[Configuration]
+    val hiveConf = ctor.newInstance(hadoopConf, hiveConfClass).asInstanceOf[Configuration]
     val metastoreUri = hiveConf.getTrimmed("hive.metastore.uris", "")
 
     // Check for local metastore
@@ -76,12 +75,10 @@ private[yarn] class HiveTokenProvider extends ServiceTokenProvider with Logging 
           val hive2Token = new Token[DelegationTokenIdentifier]()
           hive2Token.decodeFromUrlString(tokenStr)
           creds.addToken(new Text("hive.server2.delegation.token"), hive2Token)
-          Array(hive2Token)
         }
       } catch {
         case NonFatal(e) =>
           logDebug(s"Fail to get token from service $serviceName", e)
-          Array.empty
       } finally {
         Utils.tryLogNonFatalError {
           closeCurrent.invoke(null)
@@ -89,8 +86,9 @@ private[yarn] class HiveTokenProvider extends ServiceTokenProvider with Logging 
       }
     } else {
       logDebug("HiveMetaStore configured in local mode")
-      Array.empty
     }
+
+    (creds, None)
   }
 
   /**
