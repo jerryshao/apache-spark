@@ -24,10 +24,12 @@ import scala.collection.mutable
 import scala.util.Properties
 
 import com.google.common.collect.MapMaker
+import org.apache.hadoop.security.UserGroupInformation
 
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.api.python.PythonWorkerFactory
 import org.apache.spark.broadcast.BroadcastManager
+import org.apache.spark.deploy.credentials.CredentialsUpdateEndpoint
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 import org.apache.spark.memory.{MemoryManager, StaticMemoryManager, UnifiedMemoryManager}
@@ -253,6 +255,11 @@ object SparkEnv extends Logging {
     } else if (rpcEnv.address != null) {
       conf.set("spark.executor.port", rpcEnv.address.port.toString)
       logInfo(s"Setting spark.executor.port to: ${rpcEnv.address.port.toString}")
+    }
+
+    if (isDriver && UserGroupInformation.isSecurityEnabled) {
+      rpcEnv.setupEndpoint(CredentialsUpdateEndpoint.ENDPOINT_NAME,
+        new CredentialsUpdateEndpoint(rpcEnv))
     }
 
     // Create an instance of the class with the given name, possibly initializing it with our conf

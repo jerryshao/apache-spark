@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.yarn.security
+package org.apache.spark.deploy.credentials
 
 import java.lang.reflect.UndeclaredThrowableException
 import java.security.PrivilegedExceptionAction
@@ -33,7 +33,7 @@ import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
-private[security] class HiveCredentialProvider extends ServiceCredentialProvider with Logging {
+private[credentials] class HiveCredentialProvider extends ServiceCredentialProvider with Logging {
 
   override def serviceName: String = "hive"
 

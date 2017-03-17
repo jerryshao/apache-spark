@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.yarn.security
+package org.apache.spark.deploy.credentials
 
 import scala.reflect.runtime.universe
 import scala.util.control.NonFatal
@@ -27,7 +27,7 @@ import org.apache.hadoop.security.token.{Token, TokenIdentifier}
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 
-private[security] class HBaseCredentialProvider extends ServiceCredentialProvider with Logging {
+private[credentials] class HBaseCredentialProvider extends ServiceCredentialProvider with Logging {
 
   override def serviceName: String = "hbase"
 

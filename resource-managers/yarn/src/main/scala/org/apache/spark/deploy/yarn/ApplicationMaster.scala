@@ -17,17 +17,19 @@
 
 package org.apache.spark.deploy.yarn
 
-import java.io.{File, IOException}
+import java.io.{ByteArrayInputStream, DataInputStream, File, IOException}
 import java.lang.reflect.InvocationTargetException
 import java.net.{Socket, URI, URL}
 import java.util.concurrent.{TimeoutException, TimeUnit}
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable.HashMap
 import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
 import scala.util.control.NonFatal
 
 import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.security.{Credentials, UserGroupInformation}
 import org.apache.hadoop.yarn.api._
 import org.apache.hadoop.yarn.api.records._
 import org.apache.hadoop.yarn.conf.YarnConfiguration
@@ -36,9 +38,10 @@ import org.apache.hadoop.yarn.util.{ConverterUtils, Records}
 
 import org.apache.spark._
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.deploy.credentials.ConfigurableCredentialManager
 import org.apache.spark.deploy.history.HistoryServer
 import org.apache.spark.deploy.yarn.config._
-import org.apache.spark.deploy.yarn.security.{AMCredentialRenewer, ConfigurableCredentialManager}
+import org.apache.spark.deploy.yarn.security.AMCredentialRenewer
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 import org.apache.spark.rpc._
@@ -247,8 +250,8 @@ private[spark] class ApplicationMaster(
       if (sparkConf.contains(CREDENTIALS_FILE_PATH.key)) {
         // If a principal and keytab have been set, use that to create new credentials for executors
         // periodically
-        credentialRenewer =
-          new ConfigurableCredentialManager(sparkConf, yarnConf).credentialRenewer()
+        val credentialRenewer = new AMCredentialRenewer(sparkConf, yarnConf,
+          new ConfigurableCredentialManager(sparkConf, yarnConf))
         credentialRenewer.scheduleLoginFromKeytab()
       }
 
@@ -719,6 +722,22 @@ private[spark] class ApplicationMaster(
             resetAllocatorInterval()
           case None =>
             logWarning("Container allocator is not ready to find executor loss reasons yet.")
+        }
+
+      case UpdateCredentials(c) =>
+        logInfo(s"Driver request to update credentials on AM.")
+        try {
+          val dataInput = new DataInputStream(new ByteArrayInputStream(c))
+          val credentials = new Credentials
+          credentials.readFields(dataInput)
+          logInfo(s"Update credentials with Tokens " +
+            s"${credentials.getAllTokens.asScala.map(_.getKind.toString).mkString(",")} " +
+            "to AM")
+          UserGroupInformation.getCurrentUser.addCredentials(credentials)
+          context.reply(true)
+        } catch {
+          case NonFatal(e) => logWarning(s"Failed to update credentials", e)
+            context.sendFailure(e)
         }
     }
 

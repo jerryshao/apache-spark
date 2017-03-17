@@ -23,7 +23,11 @@ import javax.annotation.concurrent.GuardedBy
 
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 import scala.concurrent.Future
-import scala.concurrent.duration.Duration
+import scala.util.{Failure, Success}
+import scala.util.control.NonFatal
+
+import org.apache.hadoop.io.DataOutputBuffer
+import org.apache.hadoop.security.UserGroupInformation
 
 import org.apache.spark.{ExecutorAllocationClient, SparkEnv, SparkException, TaskState}
 import org.apache.spark.internal.Logging
@@ -188,8 +192,18 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
             }
           }
           executorRef.send(RegisteredExecutor)
+
           // Note: some tests expect the reply to come after we put the executor in the map
-          context.reply(true)
+          // Update credentials once new executor is registered.
+          val credentials = UserGroupInformation.getCurrentUser.getCredentials
+          val dob = new DataOutputBuffer()
+          credentials.write(dob)
+          val future = executorRef.ask[Boolean](UpdateCredentials(dob.getData))
+          future onComplete {
+            case Success(b) => context.reply(b)
+            case Failure(NonFatal(e)) => context.sendFailure(e)
+          }(ThreadUtils.sameThread)
+
           listenerBus.post(
             SparkListenerExecutorAdded(System.currentTimeMillis(), executorId, data))
           makeOffers()
@@ -218,6 +232,19 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         val reply = SparkAppConfig(sparkProperties,
           SparkEnv.get.securityManager.getIOEncryptionKey())
         context.reply(reply)
+
+      case UpdateCredentials(creds: Array[Byte]) =>
+        val futures = executorDataMap.map { case (_, e) =>
+          e.executorEndpoint.ask[Boolean](UpdateCredentials(creds))
+        }
+
+        implicit val executor = ThreadUtils.sameThread
+        Future.sequence(futures)
+          .map { booleans => booleans.reduce(_ && _) }
+          .andThen {
+            case Success(b) => context.reply(b)
+            case Failure(NonFatal(e)) => context.sendFailure(e)
+          }
     }
 
     // Make fake resource offers on all executors
@@ -632,6 +659,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     // Kill all the executors on this host in an event loop to ensure serialization.
     driverEndpoint.send(KillExecutorsOnHost(host))
     true
+  }
+
+  def updateCredentials(creds: Array[Byte]): Future[Boolean] = {
+    driverEndpoint.ask[Boolean](UpdateCredentials(creds))
   }
 }
 

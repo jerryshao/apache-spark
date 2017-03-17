@@ -25,6 +25,8 @@ import java.text.ParseException
 
 import scala.annotation.tailrec
 import scala.collection.mutable.{ArrayBuffer, HashMap, Map}
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
 import scala.util.Properties
 
 import org.apache.commons.lang3.StringUtils
@@ -44,6 +46,7 @@ import org.apache.ivy.plugins.resolver.{ChainResolver, FileSystemResolver, IBibl
 
 import org.apache.spark._
 import org.apache.spark.api.r.RUtils
+import org.apache.spark.deploy.credentials.CredentialsUtils
 import org.apache.spark.deploy.rest._
 import org.apache.spark.launcher.SparkLauncher
 import org.apache.spark.util._
@@ -54,7 +57,7 @@ import org.apache.spark.util._
  */
 private[deploy] object SparkSubmitAction extends Enumeration {
   type SparkSubmitAction = Value
-  val SUBMIT, KILL, REQUEST_STATUS = Value
+  val SUBMIT, KILL, REQUEST_STATUS, UPDATE_CREDENTIALS = Value
 }
 
 /**
@@ -117,6 +120,7 @@ object SparkSubmit extends CommandLineUtils {
       case SparkSubmitAction.SUBMIT => submit(appArgs)
       case SparkSubmitAction.KILL => kill(appArgs)
       case SparkSubmitAction.REQUEST_STATUS => requestStatus(appArgs)
+      case SparkSubmitAction.UPDATE_CREDENTIALS => updateCredentials(appArgs)
     }
   }
 
@@ -202,6 +206,16 @@ object SparkSubmit extends CommandLineUtils {
     } else {
       doRunMain()
     }
+  }
+
+  private def updateCredentials(args: SparkSubmitArguments): Unit = {
+    val (_, _, sysProps, _) = prepareSubmitEnvironment(args)
+    val sparkConf = new SparkConf(false).setAll(sysProps)
+
+    val credentialsUtils = new CredentialsUtils(sparkConf)
+
+    ThreadUtils.awaitResult(
+      credentialsUtils.updateCredentials(args.applicationToUpdateCredentials), Duration.Inf)
   }
 
   /**

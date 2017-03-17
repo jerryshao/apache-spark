@@ -25,6 +25,7 @@ import org.apache.hadoop.security.UserGroupInformation
 
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.deploy.credentials.ConfigurableCredentialManager
 import org.apache.spark.deploy.yarn.YarnSparkHadoopUtil
 import org.apache.spark.deploy.yarn.config._
 import org.apache.spark.internal.Logging

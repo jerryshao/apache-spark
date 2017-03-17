@@ -48,8 +48,8 @@ import org.apache.hadoop.yarn.util.Records
 
 import org.apache.spark.{SecurityManager, SparkConf, SparkException}
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.deploy.credentials.ConfigurableCredentialManager
 import org.apache.spark.deploy.yarn.config._
-import org.apache.spark.deploy.yarn.security.ConfigurableCredentialManager
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 import org.apache.spark.launcher.{LauncherBackend, SparkAppHandle, YarnCommandBuilderUtils}

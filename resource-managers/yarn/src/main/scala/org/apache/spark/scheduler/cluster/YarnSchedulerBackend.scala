@@ -17,12 +17,13 @@
 
 package org.apache.spark.scheduler.cluster
 
+import org.apache.hadoop.io.DataOutputBuffer
+import org.apache.hadoop.security.UserGroupInformation
+
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
-
 import org.apache.hadoop.yarn.api.records.{ApplicationAttemptId, ApplicationId}
-
 import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc._
@@ -149,6 +150,14 @@ private[spark] abstract class YarnSchedulerBackend(
     totalRegisteredExecutors.get() >= totalExpectedExecutors * minRegisteredRatio
   }
 
+  override def updateCredentials(creds: Array[Byte]): Future[Boolean] = {
+    implicit val executors = ThreadUtils.sameThread
+    Future.sequence {
+      Seq(super.updateCredentials(creds),
+        yarnSchedulerEndpointRef.ask[Boolean](UpdateCredentials(creds)))
+    }.map { booleans => booleans.reduce(_ && _) }
+  }
+
   /**
    * Add filters to the SparkUI.
    */
@@ -263,6 +272,15 @@ private[spark] abstract class YarnSchedulerBackend(
           reset()
         }
 
+        // Update credentials once new executor is registered.
+        val credentials = UserGroupInformation.getCurrentUser.getCredentials
+        val dob = new DataOutputBuffer()
+        credentials.write(dob)
+        val future = am.ask[Boolean](UpdateCredentials(dob.getData))
+        future onFailure {
+          case NonFatal(e) => logWarning(s"Failed to update credentails to AM once registered.")
+        }(ThreadUtils.sameThread)
+
       case AddWebUIFilter(filterName, filterParams, proxyBase) =>
         addWebUIFilter(filterName, filterParams, proxyBase)
 
@@ -302,6 +320,21 @@ private[spark] abstract class YarnSchedulerBackend(
             }(ThreadUtils.sameThread)
           case None =>
             logWarning("Attempted to kill executors before the AM has registered!")
+            context.reply(false)
+        }
+
+      case UpdateCredentials(c) =>
+        amEndpoint match {
+          case Some(am) =>
+            am.ask[Boolean](UpdateCredentials(c)).andThen {
+              case Success(b) => context.reply(b)
+              case Failure(NonFatal(e)) =>
+                logWarning(s"Send UpdateCredentials to AM was unsuccessful", e)
+                  context.sendFailure(e)
+            }(ThreadUtils.sameThread)
+
+          case None =>
+            logWarning("Attempted to update credentials before the AM has registered!")
             context.reply(false)
         }
 

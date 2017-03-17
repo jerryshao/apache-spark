@@ -443,6 +443,7 @@ class SparkSubmitCommandBuilder extends AbstractCommandBuilder {
           break;
         case KILL_SUBMISSION:
         case STATUS:
+        case UPDATE_CREDENTIALS:
           isAppResourceReq = false;
           sparkArgs.add(opt);
           sparkArgs.add(value);

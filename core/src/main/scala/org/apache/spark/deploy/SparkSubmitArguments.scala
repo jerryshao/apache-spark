@@ -77,6 +77,7 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
   var submissionToKill: String = null
   var submissionToRequestStatusFor: String = null
   var useRest: Boolean = true // used internally
+  var applicationToUpdateCredentials: String = null
 
   /** Default properties present in the currently defined defaults file. */
   lazy val defaultSparkProperties: HashMap[String, String] = {
@@ -239,6 +240,7 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
       case SUBMIT => validateSubmitArguments()
       case KILL => validateKillArguments()
       case REQUEST_STATUS => validateStatusRequestArguments()
+      case SparkSubmitAction.UPDATE_CREDENTIALS => validateUpdateCredentialsArguments()
     }
   }
 
@@ -274,7 +276,7 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
       SparkSubmit.printErrorAndExit(
         "Killing submissions is only supported in standalone or Mesos mode!")
     }
-    if (submissionToKill == null) {
+    if (submissionToKill == null)
       SparkSubmit.printErrorAndExit("Please specify a submission to kill.")
     }
   }
@@ -286,6 +288,17 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
     }
     if (submissionToRequestStatusFor == null) {
       SparkSubmit.printErrorAndExit("Please specify a submission to request status for.")
+    }
+  }
+
+  private def validateUpdateCredentialsArguments(): Unit = {
+    if (!master.startsWith("yarn")) {
+      SparkSubmit.printErrorAndExit(
+        "Update credentials currently is only supported in yarn mode!")
+    }
+
+    if (applicationToUpdateCredentials == null) {
+      SparkSubmit.printErrorAndExit("Please specify applicationId to update credentials.")
     }
   }
 
@@ -442,6 +455,13 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
       case USAGE_ERROR =>
         printUsageAndExit(1)
 
+      case UPDATE_CREDENTIALS =>
+        applicationToUpdateCredentials = value
+        if (action != null) {
+          SparkSubmit.printErrorAndExit(s"Action cannot be both $action and $UPDATE_CREDENTIALS.")
+        }
+        action = SparkSubmitAction.UPDATE_CREDENTIALS
+
       case _ =>
         throw new IllegalArgumentException(s"Unexpected argument '$opt'.")
     }
@@ -484,7 +504,8 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
       """Usage: spark-submit [options] <app jar | python file> [app arguments]
         |Usage: spark-submit --kill [submission ID] --master [spark://...]
         |Usage: spark-submit --status [submission ID] --master [spark://...]
-        |Usage: spark-submit run-example [options] example-class [example args]""".stripMargin)
+        |Usage: spark-submit run-example [options] example-class [example args]
+        |Usage: spark-submit --update-credentials [application ID] --master yarn""".stripMargin)
     outStream.println(command)
 
     val mem_mb = Utils.DEFAULT_DRIVER_MEM_MB

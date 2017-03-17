@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.yarn.security
+package org.apache.spark.deploy.credentials
 
 import scala.collection.JavaConverters._
 import scala.util.Try
@@ -27,11 +27,10 @@ import org.apache.hadoop.security.Credentials
 import org.apache.hadoop.security.token.delegation.AbstractDelegationTokenIdentifier
 
 import org.apache.spark.{SparkConf, SparkException}
-import org.apache.spark.deploy.yarn.config._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 
-private[security] class HadoopFSCredentialProvider
+private[credentials] class HadoopFSCredentialProvider
     extends ServiceCredentialProvider with Logging {
   // Token renewal interval, this value will be set in the first call,
   // if None means no token renewer specified or no token can be renewed,
@@ -113,8 +112,9 @@ private[security] class HadoopFSCredentialProvider
   }
 
   private def hadoopFSsToAccess(hadoopConf: Configuration, sparkConf: SparkConf): Set[Path] = {
-    sparkConf.get(FILESYSTEMS_TO_ACCESS).map(new Path(_)).toSet +
-      sparkConf.get(STAGING_DIR).map(new Path(_))
+    sparkConf.get("spark.yarn.access.hadoopFileSystems", "").split(",")
+      .filter { s => s.trim.nonEmpty }.map(new Path(_)).toSet +
+      sparkConf.getOption("spark.yarn.stagingDir").map(new Path(_))
         .getOrElse(FileSystem.get(hadoopConf).getHomeDirectory)
   }
 }
