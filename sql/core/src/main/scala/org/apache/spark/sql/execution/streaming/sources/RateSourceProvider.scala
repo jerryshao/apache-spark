@@ -15,226 +15,39 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution.streaming
+package org.apache.spark.sql.execution.streaming.sources
 
 import java.io._
 import java.nio.charset.StandardCharsets
 import java.util.Optional
 import java.util.concurrent.TimeUnit
 
+import scala.collection.JavaConverters._
+
 import org.apache.commons.io.IOUtils
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.JavaUtils
-import org.apache.spark.sql.{AnalysisException, DataFrame, SQLContext}
-import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils}
+import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.execution.streaming.continuous.RateStreamContinuousReader
-import org.apache.spark.sql.sources.{DataSourceRegister, StreamSourceProvider}
-import org.apache.spark.sql.sources.v2._
-import org.apache.spark.sql.sources.v2.reader.streaming.ContinuousReader
-import org.apache.spark.sql.types._
+import org.apache.spark.sql.sources.DataSourceRegister
+import org.apache.spark.sql.sources.v2.{ContinuousReadSupport, DataSourceOptions, DataSourceV2, MicroBatchReadSupport}
+import org.apache.spark.sql.sources.v2.reader._
+import org.apache.spark.sql.sources.v2.reader.streaming.{ContinuousReader, MicroBatchReader, Offset}
+import org.apache.spark.sql.types.{LongType, StructField, StructType, TimestampType}
 import org.apache.spark.util.{ManualClock, SystemClock}
-
-/**
- *  A source that generates increment long values with timestamps. Each generated row has two
- *  columns: a timestamp column for the generated time and an auto increment long column starting
- *  with 0L.
- *
- *  This source supports the following options:
- *  - `rowsPerSecond` (e.g. 100, default: 1): How many rows should be generated per second.
- *  - `rampUpTime` (e.g. 5s, default: 0s): How long to ramp up before the generating speed
- *    becomes `rowsPerSecond`. Using finer granularities than seconds will be truncated to integer
- *    seconds.
- *  - `numPartitions` (e.g. 10, default: Spark's default parallelism): The partition number for the
- *    generated rows. The source will try its best to reach `rowsPerSecond`, but the query may
- *    be resource constrained, and `numPartitions` can be tweaked to help reach the desired speed.
- */
-class RateSourceProvider extends StreamSourceProvider with DataSourceRegister
-  with DataSourceV2 with ContinuousReadSupport {
-
-  override def sourceSchema(
-      sqlContext: SQLContext,
-      schema: Option[StructType],
-      providerName: String,
-      parameters: Map[String, String]): (String, StructType) = {
-    if (schema.nonEmpty) {
-      throw new AnalysisException("The rate source does not support a user-specified schema.")
-    }
-
-    (shortName(), RateSourceProvider.SCHEMA)
-  }
-
-  override def createSource(
-      sqlContext: SQLContext,
-      metadataPath: String,
-      schema: Option[StructType],
-      providerName: String,
-      parameters: Map[String, String]): Source = {
-    val params = CaseInsensitiveMap(parameters)
-
-    val rowsPerSecond = params.get("rowsPerSecond").map(_.toLong).getOrElse(1L)
-    if (rowsPerSecond <= 0) {
-      throw new IllegalArgumentException(
-        s"Invalid value '${params("rowsPerSecond")}'. The option 'rowsPerSecond' " +
-          "must be positive")
-    }
-
-    val rampUpTimeSeconds =
-      params.get("rampUpTime").map(JavaUtils.timeStringAsSec(_)).getOrElse(0L)
-    if (rampUpTimeSeconds < 0) {
-      throw new IllegalArgumentException(
-        s"Invalid value '${params("rampUpTime")}'. The option 'rampUpTime' " +
-          "must not be negative")
-    }
-
-    val numPartitions = params.get("numPartitions").map(_.toInt).getOrElse(
-      sqlContext.sparkContext.defaultParallelism)
-    if (numPartitions <= 0) {
-      throw new IllegalArgumentException(
-        s"Invalid value '${params("numPartitions")}'. The option 'numPartitions' " +
-          "must be positive")
-    }
-
-    new RateStreamSource(
-      sqlContext,
-      metadataPath,
-      rowsPerSecond,
-      rampUpTimeSeconds,
-      numPartitions,
-      params.get("useManualClock").map(_.toBoolean).getOrElse(false) // Only for testing
-    )
-  }
-
-  override def createContinuousReader(
-      schema: Optional[StructType],
-      checkpointLocation: String,
-      options: DataSourceOptions): ContinuousReader = {
-    new RateStreamContinuousReader(options)
-  }
-
-  override def shortName(): String = "rate"
-}
 
 object RateSourceProvider {
   val SCHEMA =
     StructType(StructField("timestamp", TimestampType) :: StructField("value", LongType) :: Nil)
 
   val VERSION = 1
-}
 
-class RateStreamSource(
-    sqlContext: SQLContext,
-    metadataPath: String,
-    rowsPerSecond: Long,
-    rampUpTimeSeconds: Long,
-    numPartitions: Int,
-    useManualClock: Boolean) extends Source with Logging {
-
-  import RateSourceProvider._
-  import RateStreamSource._
-
-  val clock = if (useManualClock) new ManualClock else new SystemClock
-
-  private val maxSeconds = Long.MaxValue / rowsPerSecond
-
-  if (rampUpTimeSeconds > maxSeconds) {
-    throw new ArithmeticException(
-      s"Integer overflow. Max offset with $rowsPerSecond rowsPerSecond" +
-        s" is $maxSeconds, but 'rampUpTimeSeconds' is $rampUpTimeSeconds.")
-  }
-
-  private val startTimeMs = {
-    val metadataLog =
-      new HDFSMetadataLog[LongOffset](sqlContext.sparkSession, metadataPath) {
-        override def serialize(metadata: LongOffset, out: OutputStream): Unit = {
-          val writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8))
-          writer.write("v" + VERSION + "\n")
-          writer.write(metadata.json)
-          writer.flush
-        }
-
-        override def deserialize(in: InputStream): LongOffset = {
-          val content = IOUtils.toString(new InputStreamReader(in, StandardCharsets.UTF_8))
-          // HDFSMetadataLog guarantees that it never creates a partial file.
-          assert(content.length != 0)
-          if (content(0) == 'v') {
-            val indexOfNewLine = content.indexOf("\n")
-            if (indexOfNewLine > 0) {
-              val version = parseVersion(content.substring(0, indexOfNewLine), VERSION)
-              LongOffset(SerializedOffset(content.substring(indexOfNewLine + 1)))
-            } else {
-              throw new IllegalStateException(
-                s"Log file was malformed: failed to detect the log file version line.")
-            }
-          } else {
-            throw new IllegalStateException(
-              s"Log file was malformed: failed to detect the log file version line.")
-          }
-        }
-      }
-
-    metadataLog.get(0).getOrElse {
-      val offset = LongOffset(clock.getTimeMillis())
-      metadataLog.add(0, offset)
-      logInfo(s"Start time: $offset")
-      offset
-    }.offset
-  }
-
-  /** When the system time runs backward, "lastTimeMs" will make sure we are still monotonic. */
-  @volatile private var lastTimeMs = startTimeMs
-
-  override def schema: StructType = RateSourceProvider.SCHEMA
-
-  override def getOffset: Option[Offset] = {
-    val now = clock.getTimeMillis()
-    if (lastTimeMs < now) {
-      lastTimeMs = now
-    }
-    Some(LongOffset(TimeUnit.MILLISECONDS.toSeconds(lastTimeMs - startTimeMs)))
-  }
-
-  override def getBatch(start: Option[Offset], end: Offset): DataFrame = {
-    val startSeconds = start.flatMap(LongOffset.convert(_).map(_.offset)).getOrElse(0L)
-    val endSeconds = LongOffset.convert(end).map(_.offset).getOrElse(0L)
-    assert(startSeconds <= endSeconds, s"startSeconds($startSeconds) > endSeconds($endSeconds)")
-    if (endSeconds > maxSeconds) {
-      throw new ArithmeticException("Integer overflow. Max offset with " +
-        s"$rowsPerSecond rowsPerSecond is $maxSeconds, but it's $endSeconds now.")
-    }
-    // Fix "lastTimeMs" for recovery
-    if (lastTimeMs < TimeUnit.SECONDS.toMillis(endSeconds) + startTimeMs) {
-      lastTimeMs = TimeUnit.SECONDS.toMillis(endSeconds) + startTimeMs
-    }
-    val rangeStart = valueAtSecond(startSeconds, rowsPerSecond, rampUpTimeSeconds)
-    val rangeEnd = valueAtSecond(endSeconds, rowsPerSecond, rampUpTimeSeconds)
-    logDebug(s"startSeconds: $startSeconds, endSeconds: $endSeconds, " +
-      s"rangeStart: $rangeStart, rangeEnd: $rangeEnd")
-
-    if (rangeStart == rangeEnd) {
-      return sqlContext.internalCreateDataFrame(
-        sqlContext.sparkContext.emptyRDD, schema, isStreaming = true)
-    }
-
-    val localStartTimeMs = startTimeMs + TimeUnit.SECONDS.toMillis(startSeconds)
-    val relativeMsPerValue =
-      TimeUnit.SECONDS.toMillis(endSeconds - startSeconds).toDouble / (rangeEnd - rangeStart)
-
-    val rdd = sqlContext.sparkContext.range(rangeStart, rangeEnd, 1, numPartitions).map { v =>
-      val relative = math.round((v - rangeStart) * relativeMsPerValue)
-      InternalRow(DateTimeUtils.fromMillis(relative + localStartTimeMs), v)
-    }
-    sqlContext.internalCreateDataFrame(rdd, schema, isStreaming = true)
-  }
-
-  override def stop(): Unit = {}
-
-  override def toString: String = s"RateSource[rowsPerSecond=$rowsPerSecond, " +
-    s"rampUpTimeSeconds=$rampUpTimeSeconds, numPartitions=$numPartitions]"
-}
-
-object RateStreamSource {
+  val NUM_PARTITIONS = "numPartitions"
+  val ROWS_PER_SECOND = "rowsPerSecond"
+  val RAMP_UP_TIME = "rampUpTime"
 
   /** Calculate the end value we will emit at the time `seconds`. */
   def valueAtSecond(seconds: Long, rowsPerSecond: Long, rampUpTimeSeconds: Long): Long = {
@@ -260,3 +73,220 @@ object RateStreamSource {
     }
   }
 }
+
+class RateSourceProvider extends DataSourceV2
+  with MicroBatchReadSupport with ContinuousReadSupport with DataSourceRegister {
+  import RateSourceProvider._
+
+  private def checkParameters(options: DataSourceOptions): Unit = {
+    if (options.get(ROWS_PER_SECOND).isPresent) {
+      val rowsPerSecond = options.get(ROWS_PER_SECOND).get().toLong
+      if (rowsPerSecond <= 0) {
+        throw new IllegalArgumentException(
+          s"Invalid value '$rowsPerSecond'. The option 'rowsPerSecond' must be positive")
+      }
+    }
+
+    if (options.get(RAMP_UP_TIME).isPresent) {
+      val rampUpTimeSeconds =
+        JavaUtils.timeStringAsSec(options.get(RAMP_UP_TIME).get())
+      if (rampUpTimeSeconds < 0) {
+        throw new IllegalArgumentException(
+          s"Invalid value '$rampUpTimeSeconds'. The option 'rampUpTime' must not be negative")
+      }
+    }
+
+    if (options.get(NUM_PARTITIONS).isPresent) {
+      val numPartitions = options.get(NUM_PARTITIONS).get().toInt
+      if (numPartitions <= 0) {
+        throw new IllegalArgumentException(
+          s"Invalid value '$numPartitions'. The option 'numPartitions' must be positive")
+      }
+    }
+  }
+
+  override def createMicroBatchReader(
+                                       schema: Optional[StructType],
+                                       checkpointLocation: String,
+                                       options: DataSourceOptions): MicroBatchReader = {
+    checkParameters(options)
+    if (schema.isPresent) {
+      throw new AnalysisException("The rate source does not support a user-specified schema.")
+    }
+
+    new RateStreamMicroBatchReader(options, checkpointLocation)
+  }
+
+  override def createContinuousReader(
+                                       schema: Optional[StructType],
+                                       checkpointLocation: String,
+                                       options: DataSourceOptions): ContinuousReader = new RateStreamContinuousReader(options)
+
+  override def shortName(): String = "rate"
+}
+
+class RateStreamMicroBatchReader(options: DataSourceOptions, checkpointLocation: String)
+  extends MicroBatchReader with Logging {
+  import RateSourceProvider._
+
+  private[sources] val clock = {
+    // The option to use a manual clock is provided only for unit testing purposes.
+    if (options.getBoolean("useManualClock", false)) new ManualClock else new SystemClock
+  }
+
+  private val rowsPerSecond =
+    options.get(ROWS_PER_SECOND).orElse("1").toLong
+
+  private val rampUpTimeSeconds =
+    Option(options.get(RAMP_UP_TIME).orElse(null.asInstanceOf[String]))
+      .map(JavaUtils.timeStringAsSec(_))
+      .getOrElse(0L)
+
+  private val maxSeconds = Long.MaxValue / rowsPerSecond
+
+  if (rampUpTimeSeconds > maxSeconds) {
+    throw new ArithmeticException(
+      s"Integer overflow. Max offset with $rowsPerSecond rowsPerSecond" +
+        s" is $maxSeconds, but 'rampUpTimeSeconds' is $rampUpTimeSeconds.")
+  }
+
+  private[sources] val creationTimeMs = {
+    val session = SparkSession.getActiveSession.orElse(SparkSession.getDefaultSession)
+    require(session.isDefined)
+
+    val metadataLog =
+      new HDFSMetadataLog[LongOffset](session.get, checkpointLocation) {
+        override def serialize(metadata: LongOffset, out: OutputStream): Unit = {
+          val writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8))
+          writer.write("v" + VERSION + "\n")
+          writer.write(metadata.json)
+          writer.flush
+        }
+
+        override def deserialize(in: InputStream): LongOffset = {
+          val content = IOUtils.toString(new InputStreamReader(in, StandardCharsets.UTF_8))
+          // HDFSMetadataLog guarantees that it never creates a partial file.
+          assert(content.length != 0)
+          if (content(0) == 'v') {
+            val indexOfNewLine = content.indexOf("\n")
+            if (indexOfNewLine > 0) {
+              parseVersion(content.substring(0, indexOfNewLine), VERSION)
+              LongOffset(SerializedOffset(content.substring(indexOfNewLine + 1)))
+            } else {
+              throw new IllegalStateException(
+                s"Log file was malformed: failed to detect the log file version line.")
+            }
+          } else {
+            throw new IllegalStateException(
+              s"Log file was malformed: failed to detect the log file version line.")
+          }
+        }
+      }
+
+    metadataLog.get(0).getOrElse {
+      val offset = LongOffset(clock.getTimeMillis())
+      metadataLog.add(0, offset)
+      logInfo(s"Start time: $offset")
+      offset
+    }.offset
+  }
+
+  @volatile private var lastTimeMs: Long = creationTimeMs
+
+  private var start: LongOffset = _
+  private var end: LongOffset = _
+
+  override def readSchema(): StructType = SCHEMA
+
+  override def setOffsetRange(start: Optional[Offset], end: Optional[Offset]): Unit = {
+    this.start = start.orElse(LongOffset(0L)).asInstanceOf[LongOffset]
+    this.end = end.orElse {
+      val now = clock.getTimeMillis()
+      if (lastTimeMs < now) {
+        lastTimeMs = now
+      }
+      LongOffset(TimeUnit.MILLISECONDS.toSeconds(lastTimeMs - creationTimeMs))
+    }.asInstanceOf[LongOffset]
+  }
+
+  override def getStartOffset(): Offset = {
+    if (start == null) throw new IllegalStateException("start offset not set")
+    start
+  }
+  override def getEndOffset(): Offset = {
+    if (end == null) throw new IllegalStateException("end offset not set")
+    end
+  }
+
+  override def deserializeOffset(json: String): Offset = {
+    LongOffset(json.toLong)
+  }
+
+  override def createDataReaderFactories(): java.util.List[DataReaderFactory[Row]] = {
+    val startSeconds = LongOffset.convert(start).map(_.offset).getOrElse(0L)
+    val endSeconds = LongOffset.convert(end).map(_.offset).getOrElse(0L)
+    assert(startSeconds <= endSeconds, s"startSeconds($startSeconds) > endSeconds($endSeconds)")
+    if (endSeconds > maxSeconds) {
+      throw new ArithmeticException("Integer overflow. Max offset with " +
+        s"$rowsPerSecond rowsPerSecond is $maxSeconds, but it's $endSeconds now.")
+    }
+    // Fix "lastTimeMs" for recovery
+    if (lastTimeMs < TimeUnit.SECONDS.toMillis(endSeconds) + creationTimeMs) {
+      lastTimeMs = TimeUnit.SECONDS.toMillis(endSeconds) + creationTimeMs
+    }
+    val rangeStart = valueAtSecond(startSeconds, rowsPerSecond, rampUpTimeSeconds)
+    val rangeEnd = valueAtSecond(endSeconds, rowsPerSecond, rampUpTimeSeconds)
+    logDebug(s"startSeconds: $startSeconds, endSeconds: $endSeconds, " +
+      s"rangeStart: $rangeStart, rangeEnd: $rangeEnd")
+
+    if (rangeStart == rangeEnd) {
+      return List.empty.asJava
+    }
+
+    val localStartTimeMs = creationTimeMs + TimeUnit.SECONDS.toMillis(startSeconds)
+    val relativeMsPerValue =
+      TimeUnit.SECONDS.toMillis(endSeconds - startSeconds).toDouble / (rangeEnd - rangeStart)
+    val numPartitions = {
+      val activeSession = SparkSession.getActiveSession
+      require(activeSession.isDefined)
+      Option(options.get(NUM_PARTITIONS).orElse(null.asInstanceOf[String]))
+        .map(_.toInt)
+        .getOrElse(activeSession.get.sparkContext.defaultParallelism)
+    }
+
+    (0 until numPartitions).map { p =>
+      new DataReaderFactory[Row] {
+        override def createDataReader(): DataReader[Row] = {
+          new DataReader[Row] {
+            var count = 0
+            override def next(): Boolean = {
+              rangeStart + p + numPartitions * count < rangeEnd
+            }
+
+            override def get(): Row = {
+              val currValue = rangeStart + p + numPartitions * count
+              count += 1
+              val relative = math.round((currValue - rangeStart) * relativeMsPerValue)
+              Row(
+                DateTimeUtils.toJavaTimestamp(
+                  DateTimeUtils.fromMillis(relative + localStartTimeMs)),
+                currValue
+              )
+            }
+
+            override def close(): Unit = {}
+          }
+        }
+      }
+    }.toList.asJava
+  }
+
+  override def commit(end: Offset): Unit = {}
+
+  override def stop(): Unit = {}
+
+  override def toString: String = s"MicroBatchRateSource[rowsPerSecond=$rowsPerSecond, " +
+    s"rampUpTimeSeconds=$rampUpTimeSeconds, " +
+    s"numPartitions=${options.get(NUM_PARTITIONS).orElse("default")}"
+}
+
