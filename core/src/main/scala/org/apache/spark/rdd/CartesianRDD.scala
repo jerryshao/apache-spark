@@ -22,6 +22,7 @@ import java.io.{IOException, ObjectOutputStream}
 import scala.reflect.ClassTag
 
 import org.apache.spark._
+import org.apache.spark.scheduler.resource.ResourcesPreference
 import org.apache.spark.util.Utils
 
 private[spark]
@@ -68,6 +69,13 @@ class CartesianRDD[T: ClassTag, U: ClassTag](
   override def getPreferredLocations(split: Partition): Seq[String] = {
     val currSplit = split.asInstanceOf[CartesianPartition]
     (rdd1.preferredLocations(currSplit.s1) ++ rdd2.preferredLocations(currSplit.s2)).distinct
+  }
+
+  override def getPreferredResources(split: Partition): ResourcesPreference = {
+    val currSplit = split.asInstanceOf[CartesianPartition]
+    val parentResources = rdd1.getPreferredResources(currSplit.s1).mergeOther(
+      rdd2.getPreferredResources(currSplit.s2))
+    parentResources.mergeOther(this.getPreferredResources(split))
   }
 
   override def compute(split: Partition, context: TaskContext): Iterator[(T, U)] = {

@@ -15,15 +15,28 @@
  * limitations under the License.
  */
 
-package org.apache.spark.scheduler
+package org.apache.spark.scheduler.resource
 
-import org.apache.spark.scheduler.resource.ExecutorResources
+private[spark] case class ExecutorResources(resources: Map[String, Array[ResourceInformation]]) {
 
-/**
- * Represents free resources available on an executor.
- */
-private[spark] case class WorkerOffer(
-    executorId: String,
-    host: String,
-    cores: Int,
-    resources: ExecutorResources)
+  def getMatchedResources(preferredResType: String): Map[String, Array[ResourceInformation]] = {
+    resources.filter(_._1.startsWith(preferredResType))
+  }
+
+  def getAvailableExecutorResources: ExecutorResources = {
+    ExecutorResources(resources.mapValues(_.filter(_.occupiedBy == ResourceInformation.UNUSED)))
+  }
+
+  def freeBy(taskId: Long): Unit = {
+    for (resArray <- resources.values; res <- resArray) {
+      if (res.occupiedBy == taskId) {
+        res.occupiedBy = ResourceInformation.UNUSED
+      }
+    }
+  }
+}
+
+private[spark] object ExecutorResources {
+  lazy val EMPTY = ExecutorResources(Map.empty)
+}
+

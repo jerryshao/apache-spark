@@ -40,6 +40,7 @@ import org.apache.spark.partial.BoundedDouble
 import org.apache.spark.partial.CountEvaluator
 import org.apache.spark.partial.GroupedCountEvaluator
 import org.apache.spark.partial.PartialResult
+import org.apache.spark.scheduler.resource.{ResourcesPreference, ResourcesPreferenceBuilder}
 import org.apache.spark.storage.{RDDBlockId, StorageLevel}
 import org.apache.spark.util.{BoundedPriorityQueue, Utils}
 import org.apache.spark.util.collection.{OpenHashMap, Utils => collectionUtils}
@@ -136,6 +137,9 @@ abstract class RDD[T: ClassTag](
    */
   protected def getPreferredLocations(split: Partition): Seq[String] = Nil
 
+  private[spark] def getPreferredResources(split: Partition): ResourcesPreference =
+    resourcesPreference
+
   /** Optionally overridden by subclasses to specify how they are partitioned. */
   @transient val partitioner: Option[Partitioner] = None
 
@@ -156,6 +160,16 @@ abstract class RDD[T: ClassTag](
   def setName(_name: String): this.type = {
     name = _name
     this
+  }
+
+  @transient protected var resourcesPreference: ResourcesPreference = ResourcesPreference.DEFAULT
+
+  private[spark] def setPreferredResources(info: ResourcesPreference): Unit = {
+    this.resourcesPreference = info
+  }
+
+  def withResources(): ResourcesPreferenceBuilder[T] = {
+    new ResourcesPreferenceBuilder(this)
   }
 
   /**

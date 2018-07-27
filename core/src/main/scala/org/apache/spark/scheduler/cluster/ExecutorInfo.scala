@@ -17,6 +17,7 @@
 package org.apache.spark.scheduler.cluster
 
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.scheduler.resource.ExecutorResources
 
 /**
  * :: DeveloperApi ::
@@ -24,9 +25,10 @@ import org.apache.spark.annotation.DeveloperApi
  */
 @DeveloperApi
 class ExecutorInfo(
-   val executorHost: String,
-   val totalCores: Int,
-   val logUrlMap: Map[String, String]) {
+    val executorHost: String,
+    val totalCores: Int,
+    val logUrlMap: Map[String, String],
+    val executorResources: ExecutorResources = ExecutorResources.EMPTY) {
 
   def canEqual(other: Any): Boolean = other.isInstanceOf[ExecutorInfo]
 
@@ -35,12 +37,13 @@ class ExecutorInfo(
       (that canEqual this) &&
         executorHost == that.executorHost &&
         totalCores == that.totalCores &&
-        logUrlMap == that.logUrlMap
+        logUrlMap == that.logUrlMap &&
+        executorResources == that.executorResources
     case _ => false
   }
 
   override def hashCode(): Int = {
-    val state = Seq(executorHost, totalCores, logUrlMap)
+    val state = Seq(executorHost, totalCores, logUrlMap, executorResources)
     state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
   }
 }

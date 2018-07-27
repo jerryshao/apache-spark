@@ -15,15 +15,40 @@
  * limitations under the License.
  */
 
-package org.apache.spark.scheduler
+package org.apache.spark.scheduler.resource
 
-import org.apache.spark.scheduler.resource.ExecutorResources
+import org.apache.spark.annotation.DeveloperApi
 
-/**
- * Represents free resources available on an executor.
- */
-private[spark] case class WorkerOffer(
-    executorId: String,
-    host: String,
-    cores: Int,
-    resources: ExecutorResources)
+@DeveloperApi
+trait ResourceInformation {
+
+  def tpe: String
+
+  def id: String = "N/A"
+
+  def spec: String = "N/A"
+
+  private[spark] var occupiedBy: Long = ResourceInformation.UNUSED
+
+  override def toString: String = s"$tpe id: $id and spec: $spec"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case that: ResourceInformation =>
+      tpe == that.tpe && id == that.id && spec == that.spec
+    case _ =>
+      false
+  }
+
+  override def hashCode(): Int = {
+    Seq(tpe, id, spec).map(_.hashCode).foldLeft(0)((a, b) => 31 * a + b)
+  }
+}
+
+private[spark] object ResourceInformation {
+  val UNUSED = -1L
+}
+
+
+trait ResourceDiscoverer {
+  def discover(): Array[ResourceInformation]
+}

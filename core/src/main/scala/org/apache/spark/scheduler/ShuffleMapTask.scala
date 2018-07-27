@@ -22,11 +22,11 @@ import java.nio.ByteBuffer
 import java.util.Properties
 
 import scala.language.existentials
-
 import org.apache.spark._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
+import org.apache.spark.scheduler.resource.ResourcesPreference
 import org.apache.spark.shuffle.ShuffleWriter
 
 /**
@@ -60,9 +60,10 @@ private[spark] class ShuffleMapTask(
     serializedTaskMetrics: Array[Byte],
     jobId: Option[Int] = None,
     appId: Option[String] = None,
-    appAttemptId: Option[String] = None)
+    appAttemptId: Option[String] = None,
+    preferredResources: ResourcesPreference = ResourcesPreference.DEFAULT)
   extends Task[MapStatus](stageId, stageAttemptId, partition.index, localProperties,
-    serializedTaskMetrics, jobId, appId, appAttemptId)
+    serializedTaskMetrics, jobId, appId, appAttemptId, preferredResources)
   with Logging {
 
   /** A constructor used only in test suites. This does not require passing in an RDD. */

@@ -25,11 +25,11 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.collection.Set
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 import scala.util.Random
-
 import org.apache.spark._
 import org.apache.spark.TaskState.TaskState
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config
+import org.apache.spark.rdd.MergedAcceleratorAwareInfo
 import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark.scheduler.TaskLocality.TaskLocality
 import org.apache.spark.storage.BlockManagerId
@@ -281,9 +281,10 @@ private[spark] class TaskSchedulerImpl(
     for (i <- 0 until shuffledOffers.size) {
       val execId = shuffledOffers(i).executorId
       val host = shuffledOffers(i).host
+      val execResources = shuffledOffers(i).resources
       if (availableCpus(i) >= CPUS_PER_TASK) {
         try {
-          for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+          for (task <- taskSet.resourceOffer(execId, host, maxLocality, execResources)) {
             tasks(i) += task
             val tid = task.taskId
             taskIdToTaskSetManager(tid) = taskSet

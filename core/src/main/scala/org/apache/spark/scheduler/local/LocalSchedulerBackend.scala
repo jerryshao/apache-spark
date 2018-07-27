@@ -48,10 +48,12 @@ private[spark] class LocalEndpoint(
     userClassPath: Seq[URL],
     scheduler: TaskSchedulerImpl,
     executorBackend: LocalSchedulerBackend,
-    private val totalCores: Int)
+    private val totalCores: Int,
+    private val totalAccelerators: Int)
   extends ThreadSafeRpcEndpoint with Logging {
 
   private var freeCores = totalCores
+  private var freeAccelerators = totalAccelerators
 
   val localExecutorId = SparkContext.DRIVER_IDENTIFIER
   val localExecutorHostname = "localhost"
@@ -67,6 +69,7 @@ private[spark] class LocalEndpoint(
       scheduler.statusUpdate(taskId, state, serializedData)
       if (TaskState.isFinished(state)) {
         freeCores += scheduler.CPUS_PER_TASK
+        freeAccelerators += scheduler.ACCELERATORS_PER_TASK
         reviveOffers()
       }
 
@@ -81,9 +84,11 @@ private[spark] class LocalEndpoint(
   }
 
   def reviveOffers() {
-    val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores))
+    val offers = IndexedSeq(
+      new WorkerOffer(localExecutorId, localExecutorHostname, freeCores, freeAccelerators))
     for (task <- scheduler.resourceOffers(offers).flatten) {
       freeCores -= scheduler.CPUS_PER_TASK
+      freeAccelerators -= scheduler.ACCELERATORS_PER_TASK
       executor.launchTask(executorBackend, task)
     }
   }
@@ -97,7 +102,8 @@ private[spark] class LocalEndpoint(
 private[spark] class LocalSchedulerBackend(
     conf: SparkConf,
     scheduler: TaskSchedulerImpl,
-    val totalCores: Int)
+    val totalCores: Int,
+    val totalAccelerators: Int)
   extends SchedulerBackend with ExecutorBackend with Logging {
 
   private val appId = "local-" + System.currentTimeMillis
@@ -123,7 +129,8 @@ private[spark] class LocalSchedulerBackend(
 
   override def start() {
     val rpcEnv = SparkEnv.get.rpcEnv
-    val executorEndpoint = new LocalEndpoint(rpcEnv, userClassPath, scheduler, this, totalCores)
+    val executorEndpoint =
+      new LocalEndpoint(rpcEnv, userClassPath, scheduler, this, totalCores, totalAccelerators)
     localEndpoint = rpcEnv.setupEndpoint("LocalSchedulerBackendEndpoint", executorEndpoint)
     listenerBus.post(SparkListenerExecutorAdded(
       System.currentTimeMillis,
