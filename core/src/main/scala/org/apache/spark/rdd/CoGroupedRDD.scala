@@ -25,6 +25,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.util.Utils
 import org.apache.spark.util.collection.{CompactBuffer, ExternalAppendOnlyMap}
@@ -124,6 +125,15 @@ class CoGroupedRDD[K: ClassTag](
       }.toArray)
     }
     array
+  }
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    split.asInstanceOf[CoGroupPartition].narrowDeps.map {
+      case Some(s) => s.rdd.getPreferredResources(s.split)
+      case None => PreferredResources.EMPTY
+    }
+      .reduce { (s1, s2) => s1.mergeOther(s2) }
+      .mergeOther(super.getPreferredResources(split))
   }
 
   override val partitioner: Some[Partitioner] = Some(part)

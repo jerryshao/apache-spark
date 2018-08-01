@@ -25,6 +25,7 @@ import org.apache.spark.graphx.impl.ShippableVertexPartition
 import org.apache.spark.graphx.impl.VertexAttributeBlock
 import org.apache.spark.graphx.impl.VertexRDDImpl
 import org.apache.spark.rdd._
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.storage.StorageLevel
 
 /**
@@ -61,6 +62,10 @@ abstract class VertexRDD[VD](
   private[graphx] def partitionsRDD: RDD[ShippableVertexPartition[VD]]
 
   override protected def getPartitions: Array[Partition] = partitionsRDD.partitions
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    partitionsRDD.getPreferredResources(split).mergeOther(this.getPreferredResources(split))
+  }
 
   /**
    * Provides the `RDD[(VertexId, VD)]` equivalent output.

@@ -28,6 +28,7 @@ import org.apache.spark.graphx.impl.EdgePartition
 import org.apache.spark.graphx.impl.EdgePartitionBuilder
 import org.apache.spark.graphx.impl.EdgeRDDImpl
 import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.storage.StorageLevel
 
 /**
@@ -45,6 +46,10 @@ abstract class EdgeRDD[ED](
   // scalastyle:on structural.type
 
   override protected def getPartitions: Array[Partition] = partitionsRDD.partitions
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    partitionsRDD.getPreferredResources(split).mergeOther(this.getPreferredResources(split))
+  }
 
   override def compute(part: Partition, context: TaskContext): Iterator[Edge[ED]] = {
     val p = firstParent[(PartitionID, EdgePartition[ED, _])].iterator(part, context)
