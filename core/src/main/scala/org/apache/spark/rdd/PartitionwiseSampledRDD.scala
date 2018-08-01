@@ -22,6 +22,7 @@ import java.util.Random
 import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, TaskContext}
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.Utils
 import org.apache.spark.util.random.RandomSampler
 
@@ -66,5 +67,10 @@ private[spark] class PartitionwiseSampledRDD[T: ClassTag, U: ClassTag](
     val thisSampler = sampler.clone
     thisSampler.setSeed(split.seed)
     thisSampler.sample(firstParent[T].iterator(split.prev, context))
+  }
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    prev.getPreferredResources(split.asInstanceOf[PartitionwiseSampledRDDPartition].prev)
+      .mergeOther(super.getPreferredResources(split))
   }
 }

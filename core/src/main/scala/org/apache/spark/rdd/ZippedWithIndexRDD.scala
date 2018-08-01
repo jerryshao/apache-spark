@@ -20,6 +20,7 @@ package org.apache.spark.rdd
 import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, TaskContext}
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.Utils
 
 private[spark]
@@ -66,5 +67,10 @@ class ZippedWithIndexRDD[T: ClassTag](prev: RDD[T]) extends RDD[(T, Long)](prev)
     val split = splitIn.asInstanceOf[ZippedWithIndexRDDPartition]
     val parentIter = firstParent[T].iterator(split.prev, context)
     Utils.getIteratorZipWithIndex(parentIter, split.startIndex)
+  }
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    prev.getPreferredResources(split.asInstanceOf[ZippedWithIndexRDDPartition].prev)
+      .mergeOther(super.getPreferredResources(split))
   }
 }

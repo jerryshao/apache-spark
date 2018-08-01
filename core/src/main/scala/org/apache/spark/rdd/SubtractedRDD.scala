@@ -30,6 +30,7 @@ import org.apache.spark.Partitioner
 import org.apache.spark.ShuffleDependency
 import org.apache.spark.SparkEnv
 import org.apache.spark.TaskContext
+import org.apache.spark.rdd.resource.PreferredResources
 
 /**
  * An optimized version of cogroup for set difference/subtraction.
@@ -82,6 +83,15 @@ private[spark] class SubtractedRDD[K: ClassTag, V: ClassTag, W: ClassTag](
       }.toArray)
     }
     array
+  }
+
+  override private[spark] def getPreferredResources(split: Partition): PreferredResources = {
+    split.asInstanceOf[CoGroupPartition].narrowDeps.map {
+      case Some(s) => s.rdd.getPreferredResources(s.split)
+      case None => PreferredResources.EMPTY
+    }
+      .reduce { (s1, s2) => s1.mergeOther(s2) }
+      .mergeOther(super.getPreferredResources(split))
   }
 
   override val partitioner = Some(part)

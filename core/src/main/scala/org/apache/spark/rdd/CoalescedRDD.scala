@@ -25,6 +25,7 @@ import scala.language.existentials
 import scala.reflect.ClassTag
 
 import org.apache.spark._
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.Utils
 
 /**
@@ -121,6 +122,16 @@ private[spark] class CoalescedRDD[T: ClassTag](
    */
   override def getPreferredLocations(partition: Partition): Seq[String] = {
     partition.asInstanceOf[CoalescedRDDPartition].preferredLocation.toSeq
+  }
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    val parentResources = split.asInstanceOf[CoalescedRDDPartition].parents.map { p =>
+      prev.getPreferredResources(p)
+    }
+
+    parentResources
+      .reduce { (r1, r2) => r1.mergeOther(r2) }
+      .mergeOther(super.getPreferredResources(split))
   }
 }
 

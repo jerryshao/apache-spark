@@ -22,11 +22,12 @@ import java.io.{IOException, ObjectOutputStream}
 import scala.reflect.ClassTag
 
 import org.apache.spark.{OneToOneDependency, Partition, SparkContext, TaskContext}
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.Utils
 
 private[spark] class ZippedPartitionsPartition(
     idx: Int,
-    @transient private val rdds: Seq[RDD[_]],
+    @transient val rdds: Seq[RDD[_]],
     @transient val preferredLocations: Seq[String])
   extends Partition {
 
@@ -73,6 +74,15 @@ private[spark] abstract class ZippedPartitionsBaseRDD[V: ClassTag](
   override def clearDependencies() {
     super.clearDependencies()
     rdds = null
+  }
+
+  override private[spark] def getPreferredResources(split: Partition): PreferredResources = {
+    val partition = split.asInstanceOf[ZippedPartitionsPartition]
+    partition.rdds.zip(partition.partitions).map { case (rdd, p) =>
+      rdd.getPreferredResources(p)
+    }
+      .reduce { (s1, s2) => s1.mergeOther(s2) }
+      .mergeOther(super.getPreferredResources(split))
   }
 }
 

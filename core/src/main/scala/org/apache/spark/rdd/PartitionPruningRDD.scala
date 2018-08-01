@@ -21,6 +21,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.{NarrowDependency, Partition, TaskContext}
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.rdd.resource.PreferredResources
 
 private[spark] class PartitionPruningRDDPartition(idx: Int, val parentSplit: Partition)
   extends Partition {
@@ -66,8 +67,12 @@ class PartitionPruningRDD[T: ClassTag](
 
   override protected def getPartitions: Array[Partition] =
     dependencies.head.asInstanceOf[PruneDependency[T]].partitions
-}
 
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    prev.getPreferredResources(split.asInstanceOf[PartitionPruningRDDPartition].parentSplit)
+      .mergeOther(super.getPreferredResources(split))
+  }
+}
 
 @DeveloperApi
 object PartitionPruningRDD {

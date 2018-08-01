@@ -22,6 +22,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, TaskContext}
 import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.resource.PreferredResources
 
 private[mllib]
 class SlidingRDDPartition[T](val idx: Int, val prev: Partition, val tail: Seq[T], val offset: Int)
@@ -106,6 +107,11 @@ class SlidingRDD[T: ClassTag](@transient val parent: RDD[T], val windowSize: Int
       }
       partitions.toArray
     }
+  }
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    parent.getPreferredResources(split.asInstanceOf[SlidingRDDPartition[_]].prev)
+      .mergeOther(this.getPreferredResources(split))
   }
 
   // TODO: Override methods such as aggregate, which only requires one Spark job.
