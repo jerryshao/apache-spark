@@ -22,6 +22,7 @@ import java.io.{IOException, ObjectOutputStream}
 import scala.reflect.ClassTag
 
 import org.apache.spark.{OneToOneDependency, Partition, SparkContext, TaskContext}
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.Utils
 
 /**
@@ -92,6 +93,15 @@ class PartitionerAwareUnionRDD[T: ClassTag](
     }
     logDebug("Selected location for " + this + ", partition " + s.index + " = " + location)
     location.toSeq
+  }
+
+  private[spark] override def getPreferredResources(split: Partition): PreferredResources = {
+    val partition = split.asInstanceOf[PartitionerAwareUnionRDDPartition]
+    partition.rdds.zip(partition.parents).map { case (rdd, p) =>
+      rdd.getPreferredResources(p)
+    }
+      .reduce { (s1, s2) => s1.mergeOther(s2) }
+      .mergeOther(super.getPreferredResources(split))
   }
 
   override def compute(s: Partition, context: TaskContext): Iterator[T] = {

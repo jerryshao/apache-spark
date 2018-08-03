@@ -26,6 +26,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.{Dependency, Partition, RangeDependency, SparkContext, TaskContext}
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.Utils
 
 /**
@@ -39,7 +40,7 @@ import org.apache.spark.util.Utils
  */
 private[spark] class UnionPartition[T: ClassTag](
     idx: Int,
-    @transient private val rdd: RDD[T],
+    @transient val rdd: RDD[T],
     val parentRddIndex: Int,
     @transient private val parentRddPartitionIndex: Int)
   extends Partition {
@@ -111,5 +112,11 @@ class UnionRDD[T: ClassTag](
   override def clearDependencies() {
     super.clearDependencies()
     rdds = null
+  }
+
+  override private[spark] def getPreferredResources(split: Partition): PreferredResources = {
+    val partition = split.asInstanceOf[UnionPartition[_]]
+    partition.rdd.getPreferredResources(partition.parentPartition)
+      .mergeOther(super.getPreferredResources(split))
   }
 }
