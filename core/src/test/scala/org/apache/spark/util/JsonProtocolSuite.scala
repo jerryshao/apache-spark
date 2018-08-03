@@ -79,8 +79,10 @@ class JsonProtocolSuite extends SparkFunSuite {
     val applicationStartWithLogs = SparkListenerApplicationStart("The winner of all", Some("appId"),
       42L, "Garfield", Some("appAttempt"), Some(logUrlMap))
     val applicationEnd = SparkListenerApplicationEnd(42L)
+    val resources = Array(ResourceInformation("/gpu/k80", "0"),
+      ResourceInformation("/gpu/p100", "1"))
     val executorAdded = SparkListenerExecutorAdded(executorAddedTime, "exec1",
-      new ExecutorInfo("Hostee.awesome.com", 11, logUrlMap))
+      new ExecutorInfo("Hostee.awesome.com", 11, logUrlMap, resources))
     val executorRemoved = SparkListenerExecutorRemoved(executorRemovedTime, "exec2", "test reason")
     val executorBlacklisted = SparkListenerExecutorBlacklisted(executorBlacklistedTime, "exec1", 22)
     val executorUnblacklisted =
@@ -134,7 +136,9 @@ class JsonProtocolSuite extends SparkFunSuite {
     testTaskMetrics(makeTaskMetrics(
       33333L, 44444L, 55555L, 66666L, 7, 8, hasHadoopInput = false, hasOutput = false))
     testBlockManagerId(BlockManagerId("Hong", "Kong", 500))
-    testExecutorInfo(new ExecutorInfo("host", 43, logUrlMap))
+    val resources = Array(ResourceInformation("/gpu/k80", "0"),
+      ResourceInformation("/gpu/p100", "1"))
+    testExecutorInfo(new ExecutorInfo("host", 43, logUrlMap, resources))
 
     // StorageLevel
     testStorageLevel(StorageLevel.NONE)
@@ -436,8 +440,17 @@ class JsonProtocolSuite extends SparkFunSuite {
     testAccumValue(Some("anything"), 123, JString("123"))
   }
 
+  test("ExecutorInfo backward compatibility") {
+    val logUrlMap = Map("stderr" -> "mystderr", "stdout" -> "mystdout").toMap
+    val resources = Array(ResourceInformation("/gpu/k80", "0"),
+      ResourceInformation("/gpu/p100", "1"))
+    val executorInfo = new ExecutorInfo("Hostee.awesome.com", 11, logUrlMap, resources)
+    val oldExecutorInfo = JsonProtocol.executorInfoToJson(executorInfo)
+      .removeField({_._1 == "Resources"})
+    val expectedExecutorInfo = new ExecutorInfo("Hostee.awesome.com", 11, logUrlMap, Array.empty)
+    assertEquals(expectedExecutorInfo, JsonProtocol.executorInfoFromJson(oldExecutorInfo))
+  }
 }
-
 
 private[spark] object JsonProtocolSuite extends Assertions {
   import InternalAccumulator._
@@ -620,6 +633,7 @@ private[spark] object JsonProtocolSuite extends Assertions {
   private def assertEquals(info1: ExecutorInfo, info2: ExecutorInfo) {
     assert(info1.executorHost == info2.executorHost)
     assert(info1.totalCores == info2.totalCores)
+    assert(info1.resources.toSet === info2.resources.toSet)
   }
 
   private def assertEquals(metrics1: TaskMetrics, metrics2: TaskMetrics) {
@@ -1782,7 +1796,19 @@ private[spark] object JsonProtocolSuite extends Assertions {
       |    "Log Urls" : {
       |      "stderr" : "mystderr",
       |      "stdout" : "mystdout"
-      |    }
+      |    },
+      |    "Resources": [
+      |      {
+      |        "Type": "/gpu/k80",
+      |        "ID": "0",
+      |        "Spec": "N/A"
+      |      },
+      |      {
+      |        "Type": "/gpu/p100",
+      |        "ID": "1",
+      |        "Spec": "N/A"
+      |      }
+      |    ]
       |  }
       |}
     """.stripMargin

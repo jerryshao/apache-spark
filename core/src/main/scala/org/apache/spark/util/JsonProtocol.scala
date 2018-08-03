@@ -463,7 +463,14 @@ private[spark] object JsonProtocol {
   def executorInfoToJson(executorInfo: ExecutorInfo): JValue = {
     ("Host" -> executorInfo.executorHost) ~
     ("Total Cores" -> executorInfo.totalCores) ~
-    ("Log Urls" -> mapToJson(executorInfo.logUrlMap))
+    ("Log Urls" -> mapToJson(executorInfo.logUrlMap)) ~
+    ("Resources" -> JArray(executorInfo.resources.map(resourceInformationToJson).toList))
+  }
+
+  def resourceInformationToJson(res: ResourceInformation): JValue = {
+    ("Type" -> res.tpe) ~
+    ("ID" -> res.id) ~
+    ("Spec" -> res.spec)
   }
 
   def blockUpdatedInfoToJson(blockUpdatedInfo: BlockUpdatedInfo): JValue = {
@@ -1012,7 +1019,17 @@ private[spark] object JsonProtocol {
     val executorHost = (json \ "Host").extract[String]
     val totalCores = (json \ "Total Cores").extract[Int]
     val logUrls = mapFromJson(json \ "Log Urls").toMap
-    new ExecutorInfo(executorHost, totalCores, logUrls)
+    val resources = jsonOption(json \ "Resources").map { l =>
+      l.extract[List[JValue]].map(resourceInformationFromJson).toArray
+    }.getOrElse(Array.empty)
+    new ExecutorInfo(executorHost, totalCores, logUrls, resources)
+  }
+
+  def resourceInformationFromJson(json: JValue): ResourceInformation = {
+    val tpe = (json \ "Type").extract[String]
+    val id = (json \ "ID").extract[String]
+    val spec = (json \ "Spec").extract[String]
+    ResourceInformation(tpe, id, spec)
   }
 
   def blockUpdatedInfoFromJson(json: JValue): BlockUpdatedInfo = {
