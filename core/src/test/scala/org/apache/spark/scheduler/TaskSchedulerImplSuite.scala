@@ -29,6 +29,7 @@ import org.scalatest.mockito.MockitoSugar
 import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.util.ManualClock
 
 class FakeSchedulerBackend extends SchedulerBackend {
@@ -1054,5 +1055,44 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     taskScheduler.submitTasks(attempt1)
     val taskDescriptions = taskScheduler.resourceOffers(workerOffers).flatten
     assert(3 === taskDescriptions.length)
+  }
+
+  test("schedule resources preferred taskSet with enough resources provided") {
+    val taskScheduler = setupScheduler()
+
+    val numFreeCores = 2
+    val workerOffers = IndexedSeq(
+      WorkerOffer("exec0", "host0", numFreeCores,
+        resources = Array(ResourceInformation("/gpu/k80"))),
+      WorkerOffer("exec1", "host1", numFreeCores,
+        resources = Array(ResourceInformation("/gpu/k80"))))
+
+    val attempt1 = FakeTask.createResourcePreferredTaskSet(2,
+      new PreferredResources(Map("/gpu" -> ((1, None)))),
+      new PreferredResources(Map("/gpu" -> ((1, None)))))
+    taskScheduler.submitTasks(attempt1)
+    val taskDesc1 = taskScheduler.resourceOffers(workerOffers).flatten
+    assert(2 === taskDesc1.length)
+    val resForAllExecs = workerOffers.flatMap(_.resources)
+    assert(resForAllExecs.map(_.occupiedByTask).toSet === taskDesc1.map(_.taskId).toSet)
+  }
+
+  test("schedule resources preferred taskSet with not enough resources provided") {
+    val taskScheduler = setupScheduler()
+
+    val numFreeCores = 2
+    val workerOffers = IndexedSeq(
+      WorkerOffer("exec0", "host0", numFreeCores,
+        resources = Array(ResourceInformation("/gpu/k80"))),
+      WorkerOffer("exec1", "host1", numFreeCores,
+        resources = Array(ResourceInformation("/gpu/k80"))))
+
+    val attempt1 = FakeTask.createResourcePreferredTaskSet(3,
+      new PreferredResources(Map("/gpu" -> ((1, None)))),
+      new PreferredResources(Map("/gpu" -> ((1, None)))),
+      new PreferredResources(Map("/gpu" -> ((1, None)))))
+    taskScheduler.submitTasks(attempt1)
+    val taskDesc1 = taskScheduler.resourceOffers(workerOffers).flatten
+    assert(2 === taskDesc1.length)
   }
 }

@@ -277,12 +277,15 @@ private[spark] class TaskSetManager(
   private def dequeueTaskFromList(
       execId: String,
       host: String,
-      list: ArrayBuffer[Int]): Option[Int] = {
+      list: ArrayBuffer[Int],
+      availableResources: Array[ResourceInformation]): Option[Int] = {
     var indexOffset = list.size
     while (indexOffset > 0) {
       indexOffset -= 1
       val index = list(indexOffset)
-      if (!isTaskBlacklistedOnExecOrNode(index, execId, host)) {
+      val taskPreferredResources = tasks(index).preferredResources
+      if (!isTaskBlacklistedOnExecOrNode(index, execId, host) &&
+        taskPreferredResources.isSatisfied(availableResources)) {
         // This should almost always be list.trimEnd(1) to remove tail
         list.remove(indexOffset)
         if (copiesRunning(index) == 0 && !successful(index)) {
@@ -311,14 +314,19 @@ private[spark] class TaskSetManager(
    * the given locality constraint.
    */
   // Labeled as protected to allow tests to override providing speculative tasks if necessary
-  protected def dequeueSpeculativeTask(execId: String, host: String, locality: TaskLocality.Value)
+  protected def dequeueSpeculativeTask(
+      execId: String,
+      host: String,
+      locality: TaskLocality.Value,
+      availableResources: Array[ResourceInformation])
     : Option[(Int, TaskLocality.Value)] =
   {
     speculatableTasks.retain(index => !successful(index)) // Remove finished tasks from set
 
     def canRunOnHost(index: Int): Boolean = {
       !hasAttemptOnHost(index, host) &&
-        !isTaskBlacklistedOnExecOrNode(index, execId, host)
+        !isTaskBlacklistedOnExecOrNode(index, execId, host) &&
+        tasks(index).preferredResources.isSatisfied(availableResources)
     }
 
     if (!speculatableTasks.isEmpty) {
@@ -389,22 +397,29 @@ private[spark] class TaskSetManager(
    *
    * @return An option containing (task index within the task set, locality, is speculative?)
    */
-  private def dequeueTask(execId: String, host: String, maxLocality: TaskLocality.Value)
+  private def dequeueTask(
+      execId: String,
+      host: String,
+      maxLocality: TaskLocality.Value,
+      availableResources: Array[ResourceInformation])
     : Option[(Int, TaskLocality.Value, Boolean)] =
   {
-    for (index <- dequeueTaskFromList(execId, host, getPendingTasksForExecutor(execId))) {
+    for (index <- dequeueTaskFromList(
+      execId, host, getPendingTasksForExecutor(execId), availableResources)) {
       return Some((index, TaskLocality.PROCESS_LOCAL, false))
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.NODE_LOCAL)) {
-      for (index <- dequeueTaskFromList(execId, host, getPendingTasksForHost(host))) {
+      for (index <- dequeueTaskFromList(
+        execId, host, getPendingTasksForHost(host), availableResources)) {
         return Some((index, TaskLocality.NODE_LOCAL, false))
       }
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.NO_PREF)) {
       // Look for noPref tasks after NODE_LOCAL for minimize cross-rack traffic
-      for (index <- dequeueTaskFromList(execId, host, pendingTasksWithNoPrefs)) {
+      for (index <- dequeueTaskFromList(
+        execId, host, pendingTasksWithNoPrefs, availableResources)) {
         return Some((index, TaskLocality.PROCESS_LOCAL, false))
       }
     }
@@ -412,20 +427,20 @@ private[spark] class TaskSetManager(
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.RACK_LOCAL)) {
       for {
         rack <- sched.getRackForHost(host)
-        index <- dequeueTaskFromList(execId, host, getPendingTasksForRack(rack))
+        index <- dequeueTaskFromList(execId, host, getPendingTasksForRack(rack), availableResources)
       } {
         return Some((index, TaskLocality.RACK_LOCAL, false))
       }
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.ANY)) {
-      for (index <- dequeueTaskFromList(execId, host, allPendingTasks)) {
+      for (index <- dequeueTaskFromList(execId, host, allPendingTasks, availableResources)) {
         return Some((index, TaskLocality.ANY, false))
       }
     }
 
     // find a speculative task if all others tasks have been scheduled
-    dequeueSpeculativeTask(execId, host, maxLocality).map {
+    dequeueSpeculativeTask(execId, host, maxLocality, availableResources).map {
       case (taskIndex, allowedLocality) => (taskIndex, allowedLocality, true)}
   }
 
@@ -444,7 +459,8 @@ private[spark] class TaskSetManager(
   def resourceOffer(
       execId: String,
       host: String,
-      maxLocality: TaskLocality.TaskLocality)
+      maxLocality: TaskLocality.TaskLocality,
+      availableResources: Array[ResourceInformation] = Array.empty)
     : Option[TaskDescription] =
   {
     val offerBlacklisted = taskSetBlacklistHelperOpt.exists { blacklist =>
@@ -464,7 +480,8 @@ private[spark] class TaskSetManager(
         }
       }
 
-      dequeueTask(execId, host, allowedLocality).map { case ((index, taskLocality, speculative)) =>
+      dequeueTask(execId, host, allowedLocality, availableResources).map {
+        case ((index, taskLocality, speculative)) =>
         // Found a task; do some bookkeeping and return a task description
         val task = tasks(index)
         val taskId = sched.newTaskId()

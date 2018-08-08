@@ -35,10 +35,40 @@ case class ResourceInformation(tpe: String, id: String = "N/A", spec: String = "
 
   private[spark] var occupiedByTask: Long = ResourceInformation.UNUSED
 
-  override def toString: String = s"$tpe id: $id and spec: $spec"
+  override def toString: String = s"$tpe id: $id, spec: $spec, is occupied by: $occupiedByTask"
+
+  private[spark] def isMatchedBy(preferredType: String): Boolean = {
+    // There's a case that prefix matching will lead to error, for example, if preferred type is
+    // "/gpu/p100", and the type here is "/gpu/p1000", using prefix matching will get an error.
+    // To avoid this issue, appending "/" to "/gpu/p100" to make sure if it is the parent type.
+    preferredType == tpe || tpe.startsWith(preferredType + "/")
+  }
 }
 
 private[spark] object ResourceInformation {
-  val UNUSED = -1L
+  val UNUSED: Long = -1L
+  val RESERVED: Long = -2L
+
+  val SUPPORTED_RESOURCES = Set("/gpu")
+
+  def occupyBy(taskId: Long, resources: Array[ResourceInformation]): Unit = {
+    resources.foreach { r =>
+      if (r.occupiedByTask == RESERVED) {
+        r.occupiedByTask = taskId
+      }
+    }
+  }
+
+  def clearBy(taskId: Long, resources: Array[ResourceInformation]): Unit = {
+    resources.foreach { r =>
+      if (r.occupiedByTask == taskId) {
+        r.occupiedByTask = UNUSED
+      }
+    }
+  }
+
+  def availableResources(resources: Array[ResourceInformation]): Array[ResourceInformation] = {
+    resources.filter(_.occupiedByTask == UNUSED)
+  }
 }
 

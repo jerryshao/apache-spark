@@ -30,6 +30,7 @@ import org.mockito.stubbing.Answer
 import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.storage.BlockManagerId
 import org.apache.spark.util.{AccumulatorV2, ManualClock, Utils}
@@ -1601,5 +1602,36 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       info4)
     verify(sched.dagScheduler).taskEnded(manager.tasks(3), Success, result.value(),
       result.accumUpdates, info3)
+  }
+
+  test("scheduling based on preferred resources") {
+    sc = new SparkContext("local", "test")
+    sched = new FakeTaskScheduler(sc, ("exec1", "host1"), ("exec2", "host2"))
+    val taskSet = FakeTask.createResourcePreferredTaskSet(4,
+      new PreferredResources(Map("/gpu" -> ((1, None)))),
+      new PreferredResources(Map("/gpu" -> ((1, None)))),
+      new PreferredResources(Map("/gpu/k80" -> ((1, Some("/gpu"))))),
+      new PreferredResources(Map("/gpu/k80" -> ((1, Some("/gpu")))))
+    )
+
+    val resForExec1 = Array(ResourceInformation("/gpu/k80"), ResourceInformation("/gpu/k80"))
+    val resForExec2 = Array(ResourceInformation("/gpu/k80"), ResourceInformation("/gpu/k80"))
+
+    val clock = new ManualClock
+    val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
+
+    val taskDes1 = manager.resourceOffer("exec1", "host1", ANY, resForExec1)
+    assert(taskDes1.get.index === 0)
+    assert(resForExec1.count(_.occupiedByTask == ResourceInformation.RESERVED) == 1)
+    val taskDes2 = manager.resourceOffer("exec1", "host1", ANY, resForExec1)
+    assert(taskDes2.get.index === 1)
+    assert(resForExec1.count(_.occupiedByTask == ResourceInformation.RESERVED) == 2)
+
+    val taskDes3 = manager.resourceOffer("exec2", "host2", ANY, resForExec2)
+    assert(taskDes3.get.index === 2)
+    assert(resForExec2.count(_.occupiedByTask == ResourceInformation.RESERVED) == 1)
+    val taskDes4 = manager.resourceOffer("exec2", "host2", ANY, resForExec2)
+    assert(taskDes4.get.index === 3)
+    assert(resForExec2.count(_.occupiedByTask == ResourceInformation.RESERVED) == 2)
   }
 }

@@ -27,6 +27,7 @@ import org.apache.spark._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.shuffle.ShuffleWriter
 
 /**
@@ -63,9 +64,10 @@ private[spark] class ShuffleMapTask(
     jobId: Option[Int] = None,
     appId: Option[String] = None,
     appAttemptId: Option[String] = None,
-    isBarrier: Boolean = false)
+    isBarrier: Boolean = false,
+    preferredResources: PreferredResources = PreferredResources.EMPTY)
   extends Task[MapStatus](stageId, stageAttemptId, partition.index, localProperties,
-    serializedTaskMetrics, jobId, appId, appAttemptId, isBarrier)
+    serializedTaskMetrics, jobId, appId, appAttemptId, isBarrier, preferredResources)
   with Logging {
 
   /** A constructor used only in test suites. This does not require passing in an RDD. */

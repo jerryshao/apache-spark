@@ -48,7 +48,8 @@ private[spark] class LocalEndpoint(
     userClassPath: Seq[URL],
     scheduler: TaskSchedulerImpl,
     executorBackend: LocalSchedulerBackend,
-    private val totalCores: Int)
+    private val totalCores: Int,
+    private val resources: Array[ResourceInformation] = Array.empty)
   extends ThreadSafeRpcEndpoint with Logging {
 
   private var freeCores = totalCores
@@ -67,6 +68,7 @@ private[spark] class LocalEndpoint(
       scheduler.statusUpdate(taskId, state, serializedData)
       if (TaskState.isFinished(state)) {
         freeCores += scheduler.CPUS_PER_TASK
+        ResourceInformation.clearBy(taskId, resources)
         reviveOffers()
       }
 
@@ -82,7 +84,7 @@ private[spark] class LocalEndpoint(
 
   def reviveOffers() {
     val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores,
-      Some(rpcEnv.address.hostPort)))
+      Some(rpcEnv.address.hostPort), ResourceInformation.availableResources(resources)))
     for (task <- scheduler.resourceOffers(offers).flatten) {
       freeCores -= scheduler.CPUS_PER_TASK
       executor.launchTask(executorBackend, task)
@@ -124,12 +126,13 @@ private[spark] class LocalSchedulerBackend(
 
   override def start() {
     val rpcEnv = SparkEnv.get.rpcEnv
-    val executorEndpoint = new LocalEndpoint(rpcEnv, userClassPath, scheduler, this, totalCores)
+    val executorEndpoint =
+      new LocalEndpoint(rpcEnv, userClassPath, scheduler, this, totalCores, Array.empty)
     localEndpoint = rpcEnv.setupEndpoint("LocalSchedulerBackendEndpoint", executorEndpoint)
     listenerBus.post(SparkListenerExecutorAdded(
       System.currentTimeMillis,
       executorEndpoint.localExecutorId,
-      new ExecutorInfo(executorEndpoint.localExecutorHostname, totalCores, Map.empty)))
+      new ExecutorInfo(executorEndpoint.localExecutorHostname, totalCores, Map.empty, Array.empty)))
     launcherBackend.setAppId(appId)
     launcherBackend.setState(SparkAppHandle.State.RUNNING)
   }
