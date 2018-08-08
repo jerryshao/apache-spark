@@ -282,15 +282,17 @@ private[spark] class TaskSchedulerImpl(
     for (i <- 0 until shuffledOffers.size) {
       val execId = shuffledOffers(i).executorId
       val host = shuffledOffers(i).host
+      val resources = shuffledOffers(i).resources
       if (availableCpus(i) >= CPUS_PER_TASK) {
         try {
-          for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+          for (task <- taskSet.resourceOffer(execId, host, maxLocality, resources)) {
             tasks(i) += task
             val tid = task.taskId
             taskIdToTaskSetManager(tid) = taskSet
             taskIdToExecutorId(tid) = execId
             executorIdToRunningTaskIds(execId).add(tid)
             availableCpus(i) -= CPUS_PER_TASK
+            ResourceInformation.occupyBy(tid, resources)
             assert(availableCpus(i) >= 0)
             // Only update hosts for a barrier task.
             if (taskSet.isBarrier) {

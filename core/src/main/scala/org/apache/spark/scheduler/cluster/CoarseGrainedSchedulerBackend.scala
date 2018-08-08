@@ -124,6 +124,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           executorDataMap.get(executorId) match {
             case Some(executorInfo) =>
               executorInfo.freeCores += scheduler.CPUS_PER_TASK
+              // Release all the resources occupied by this task.
+              ResourceInformation.clearBy(taskId, executorInfo.resources)
               makeOffers(executorId)
             case None =>
               // Ignoring the update since we don't know about the executor.
@@ -190,7 +192,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           totalCoreCount.addAndGet(cores)
           totalRegisteredExecutors.addAndGet(1)
           val data = new ExecutorData(executorRef, executorAddress, hostname,
-            cores, cores, logUrls)
+            cores, cores, logUrls, Array.empty)
           // This must be synchronized because variables mutated
           // in this block are read when requesting executors
           CoarseGrainedSchedulerBackend.this.synchronized {
@@ -242,8 +244,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         val activeExecutors = executorDataMap.filterKeys(executorIsAlive)
         val workOffers = activeExecutors.map {
           case (id, executorData) =>
+            val resources = ResourceInformation.availableResources(executorData.resources)
             new WorkerOffer(id, executorData.executorHost, executorData.freeCores,
-              Some(executorData.executorAddress.hostPort))
+              Some(executorData.executorAddress.hostPort), resources)
         }.toIndexedSeq
         scheduler.resourceOffers(workOffers)
       }
@@ -267,9 +270,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         // Filter out executors under killing
         if (executorIsAlive(executorId)) {
           val executorData = executorDataMap(executorId)
+          val resources = ResourceInformation.availableResources(executorData.resources)
           val workOffers = IndexedSeq(
             new WorkerOffer(executorId, executorData.executorHost, executorData.freeCores,
-              Some(executorData.executorAddress.hostPort)))
+              Some(executorData.executorAddress.hostPort), resources))
           scheduler.resourceOffers(workOffers)
         } else {
           Seq.empty
@@ -289,6 +293,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
       for (task <- tasks.flatten) {
         val serializedTask = TaskDescription.encode(task)
+        val executorData = executorDataMap(task.executorId)
         if (serializedTask.limit() >= maxRpcMessageSize) {
           scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
             try {
@@ -301,9 +306,11 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
               case e: Exception => logError("Exception in error callback", e)
             }
           }
+
+          // Clear the resources if task is failed to submit.
+          ResourceInformation.clearBy(task.taskId, executorData.resources)
         }
         else {
-          val executorData = executorDataMap(task.executorId)
           executorData.freeCores -= scheduler.CPUS_PER_TASK
 
           logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} hostname: " +

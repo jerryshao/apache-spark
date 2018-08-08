@@ -23,6 +23,7 @@ import scala.collection.mutable
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
+import org.apache.spark.scheduler.ResourceInformation
 
 /**
  * A class combined of preferred resource information provided by user. Each preferred resource
@@ -34,6 +35,14 @@ import org.apache.spark.rdd.RDD
  */
 private[spark] class PreferredResources(
     private val resourcesMap: Map[String, (Int, Option[String])]) extends Logging {
+
+  private val orderedPreferredResources: Array[(String, Int, Option[String])] = {
+    resourcesMap.toArray.map { case (tpe, (num, optional)) =>
+      (tpe, num, optional)
+    }.sortWith { case (l, r) =>
+      hierarchicalCompareTo(l._1, r._1)
+    }
+  }
 
   def getResource(tpe: String): Option[(Int, Option[String])] = {
     resourcesMap.get(tpe)
@@ -53,6 +62,59 @@ private[spark] class PreferredResources(
     }
   }
 
+  def isSatisfied(availableResources: Array[ResourceInformation]): Boolean = {
+    var index = 0
+    var isSatisfied = true
+    val unusedResources = ResourceInformation.availableResources(availableResources)
+    val optionalResources = new mutable.ArrayBuffer[(String, Int)]()
+
+    // 1. Check if primary resource is satisfied.
+    while (index < orderedPreferredResources.length && isSatisfied) {
+      val (preferredType, preferredNum, optional) = orderedPreferredResources(index)
+      val matchedRes = unusedResources.filter { p =>
+        p.isMatchedBy(preferredType) && p.occupiedByTask == ResourceInformation.UNUSED
+      }
+
+      if (matchedRes.length >= preferredNum) {
+        matchedRes.take(preferredNum).foreach(_.occupiedByTask = ResourceInformation.RESERVED)
+      } else if (optional.nonEmpty) {
+        optionalResources.append((optional.get, preferredNum))
+      } else {
+        isSatisfied = false
+      }
+      index += 1
+    }
+
+    // 2. Check if optional resource is satisfied
+    var isOptionalSatisfied = true
+    if (isSatisfied && optionalResources.nonEmpty) {
+      index = 0
+      val orderedOptionalResources =
+        optionalResources.sortWith { case (l, r) => hierarchicalCompareTo(l._1, r._1) }
+
+      while (index < orderedOptionalResources.length && isOptionalSatisfied) {
+        val (optionalType, optionalNum) = orderedOptionalResources(index)
+        val matchedRes = unusedResources.filter { p =>
+          p.isMatchedBy(optionalType) && p.occupiedByTask == ResourceInformation.UNUSED
+        }
+
+        if (matchedRes.length >= optionalNum) {
+          matchedRes.take(optionalNum).foreach(_.occupiedByTask = ResourceInformation.RESERVED)
+        } else {
+          isOptionalSatisfied = false
+        }
+        index += 1
+      }
+    }
+
+    isSatisfied = isSatisfied && isOptionalSatisfied
+    if (!isSatisfied) {
+      unusedResources.foreach(_.occupiedByTask = ResourceInformation.UNUSED)
+    }
+
+    isSatisfied
+  }
+
   def asMap(): Map[String, (Int, Option[String])] = resourcesMap
 
   override def equals(obj: Any): Boolean = {
@@ -61,6 +123,16 @@ private[spark] class PreferredResources(
   }
 
   override def hashCode(): Int = resourcesMap.hashCode()
+
+  private def hierarchicalCompareTo(l: String, r: String): Boolean = {
+    if (l.startsWith(r + "/")) {
+      true
+    } else if (r.startsWith(l + "/")) {
+      false
+    } else {
+      l.compareTo(r) < 0
+    }
+  }
 }
 
 private[spark] object PreferredResources {

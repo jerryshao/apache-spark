@@ -21,6 +21,7 @@ import java.util.Properties
 
 import org.apache.spark.{Partition, SparkEnv, TaskContext}
 import org.apache.spark.executor.TaskMetrics
+import org.apache.spark.rdd.resource.PreferredResources
 
 class FakeTask(
     stageId: Int,
@@ -28,9 +29,10 @@ class FakeTask(
     prefLocs: Seq[TaskLocation] = Nil,
     serializedTaskMetrics: Array[Byte] =
       SparkEnv.get.closureSerializer.newInstance().serialize(TaskMetrics.registered).array(),
-    isBarrier: Boolean = false)
+    isBarrier: Boolean = false,
+    preferredResources: PreferredResources = PreferredResources.EMPTY)
   extends Task[Int](stageId, 0, partitionId, new Properties, serializedTaskMetrics,
-    isBarrier = isBarrier) {
+    isBarrier = isBarrier, preferredResources = preferredResources) {
 
   override def runTask(context: TaskContext): Int = 0
   override def preferredLocations: Seq[TaskLocation] = prefLocs
@@ -93,5 +95,23 @@ object FakeTask {
       new FakeTask(stageId, i, if (prefLocs.size != 0) prefLocs(i) else Nil, isBarrier = true)
     }
     new TaskSet(tasks, stageId, stageAttempId, priority = 0, null)
+  }
+
+  def createResourcePreferredTaskSet(numTasks: Int, prefResources: PreferredResources*): TaskSet = {
+    createResourcePreferredTaskSet(numTasks, stageId = 0, stageAttemptId = 0, prefResources: _*)
+  }
+
+  def createResourcePreferredTaskSet(
+      numTasks: Int,
+      stageId: Int,
+      stageAttemptId: Int,
+      prefResources: PreferredResources*): TaskSet = {
+    if (prefResources.nonEmpty && prefResources.size != numTasks) {
+      throw new IllegalArgumentException("Wrong number of task preferred resources")
+    }
+    val tasks = Array.tabulate[Task[_]](numTasks) { i =>
+      new FakeTask(stageId, i, Nil, preferredResources = prefResources(i))
+    }
+    new TaskSet(tasks, stageId, stageAttemptId, priority = 0, null)
   }
 }

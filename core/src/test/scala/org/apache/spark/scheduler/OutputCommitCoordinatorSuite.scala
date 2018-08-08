@@ -113,7 +113,8 @@ class OutputCommitCoordinatorSuite extends SparkFunSuite with BeforeAndAfter {
           override def dequeueSpeculativeTask(
               execId: String,
               host: String,
-              locality: TaskLocality.Value): Option[(Int, TaskLocality.Value)] = {
+              locality: TaskLocality.Value,
+              availableResources: Array[ResourceInformation]): Option[(Int, TaskLocality.Value)] = {
             if (!hasDequeuedSpeculatedTask) {
               hasDequeuedSpeculatedTask = true
               Some((0, TaskLocality.PROCESS_LOCAL))

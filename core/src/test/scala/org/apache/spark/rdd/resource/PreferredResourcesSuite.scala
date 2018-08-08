@@ -18,6 +18,7 @@
 package org.apache.spark.rdd.resource
 
 import org.apache.spark.{SharedSparkContext, SparkFunSuite}
+import org.apache.spark.scheduler.ResourceInformation
 
 class PreferredResourcesSuite extends SparkFunSuite with SharedSparkContext {
 
@@ -95,5 +96,51 @@ class PreferredResourcesSuite extends SparkFunSuite with SharedSparkContext {
     // merge will be failed because rdd1 and rdd3 has different resource preferences.
     intercept[IllegalStateException](
       cartesianRdd.partitions.map(cartesianRdd.getPreferredResources))
+  }
+
+  test("preferred resources is satisfied") {
+    val resArray = Array(
+      ResourceInformation("/gpu/k80"),
+      ResourceInformation("/gpu/p100"),
+      ResourceInformation("/fpga"))
+
+    // The provided resources can satisfy required needs.
+    val preferredRes1 = new PreferredResources(Map(
+      "/gpu/k80" -> ((1, None))
+    ))
+    assert(preferredRes1.isSatisfied(resArray))
+    val occupiedRes1 = resArray.filter(_.occupiedByTask == ResourceInformation.RESERVED)
+    assert(occupiedRes1.length == 1)
+    assert(occupiedRes1(0).tpe == "/gpu/k80")
+    resArray.foreach(_.occupiedByTask = ResourceInformation.UNUSED)
+
+    // The provided resources can satisfy the optional needs.
+    val preferredRes2 = new PreferredResources(Map(
+      "/gpu/p1000" -> ((1, Some("/gpu")))
+    ))
+    assert(preferredRes2.isSatisfied(resArray))
+    val occupiedRes2 = resArray.filter(_.occupiedByTask == ResourceInformation.RESERVED)
+    assert(occupiedRes2.length == 1)
+    assert(occupiedRes2(0).tpe.startsWith("/gpu"))
+    resArray.foreach(_.occupiedByTask = ResourceInformation.UNUSED)
+
+    // The provided resources can satisfy the optional needs.
+    val preferredRes3 = new PreferredResources(Map(
+      "/gpu/p1000" -> ((2, Some("/gpu")))
+    ))
+    assert(preferredRes3.isSatisfied(resArray))
+    val occupiedRes3 = resArray.filter(_.occupiedByTask == ResourceInformation.RESERVED)
+    assert(occupiedRes3.length == 2)
+    assert(occupiedRes3.forall(_.tpe.startsWith("/gpu")))
+    resArray.foreach(_.occupiedByTask = ResourceInformation.UNUSED)
+
+    // The provided resources cannot satisfy the needs.
+    val preferredRes4 = new PreferredResources(Map(
+      "/gpu/k80" -> ((3, None))
+    ))
+    assert(!preferredRes4.isSatisfied(resArray))
+    val occupiedRes4 = resArray.filter(_.occupiedByTask == ResourceInformation.RESERVED)
+    assert(occupiedRes4.length == 0)
+    resArray.foreach(_.occupiedByTask = ResourceInformation.UNUSED)
   }
 }

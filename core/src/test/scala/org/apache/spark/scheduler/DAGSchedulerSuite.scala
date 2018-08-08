@@ -21,6 +21,7 @@ import java.util.Properties
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 
 import scala.annotation.meta.param
+import scala.collection.immutable.{Map => IMap}
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, Map}
 import scala.language.reflectiveCalls
 import scala.util.control.NonFatal
@@ -31,6 +32,7 @@ import org.scalatest.time.SpanSugar._
 import org.apache.spark._
 import org.apache.spark.broadcast.BroadcastManager
 import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.resource.PreferredResources
 import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark.shuffle.{FetchFailedException, MetadataFetchFailedException}
 import org.apache.spark.storage.{BlockId, BlockManagerId, BlockManagerMaster}
@@ -2516,6 +2518,61 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       sc.listenerBus.waitUntilEmpty(1000)
       assert(foundCount.get() === tasks)
     }
+  }
+
+  test("preferred resources specified in RDDs are propagated to task") {
+    val rdd1 = new MyRDD(sc, 2, Nil)
+      .withResources().require("/gpu/*", 1).build()
+    val dep1 = new ShuffleDependency(rdd1, new HashPartitioner(2))
+    val rdd2 = new MyRDD(sc, 2, List(dep1), tracker = mapOutputTracker)
+      .withResources().require("/gpu/k80", 2).build()
+    val dep2 = new ShuffleDependency(rdd2, new HashPartitioner(2))
+    val rdd3 = new MyRDD(sc, 2, List(dep2), tracker = mapOutputTracker)
+      .withResources().prefer("/fpga/*", 1, "/gpu/*").build()
+
+    val listener1 = new SimpleListener
+    val listener2 = new SimpleListener
+    val listener3 = new SimpleListener
+
+    submitMapStage(dep1, listener1)
+    submitMapStage(dep2, listener2)
+    submit(rdd3, Array(0, 1), listener = listener3)
+
+    assert(taskSets(0).stageId === 0)
+    // Make sure the preferred resources of tasks from stage 0 is the same as rdd1
+    assert {
+      taskSets(0).tasks.forall(_.preferredResources ===
+        new PreferredResources(IMap("/gpu" -> ((1, None)))))
+    }
+    complete(taskSets(0), Seq(
+      (Success, makeMapStatus("hostA", rdd1.partitions.length)),
+      (Success, makeMapStatus("hostB", rdd1.partitions.length))))
+    assert(mapOutputTracker.getMapSizesByExecutorId(dep1.shuffleId, 0).map(_._1).toSet ===
+      HashSet(makeBlockManagerId("hostA"), makeBlockManagerId("hostB")))
+    assert(listener1.results.size === 1)
+
+    assert(taskSets(1).stageId === 1)
+    assert {
+      taskSets(1).tasks.forall(_.preferredResources ===
+        new PreferredResources(IMap("/gpu/k80" -> ((2, None)))))
+    }
+    complete(taskSets(1), Seq(
+      (Success, makeMapStatus("hostB", rdd2.partitions.length)),
+      (Success, makeMapStatus("hostD", rdd2.partitions.length))))
+    assert(mapOutputTracker.getMapSizesByExecutorId(dep2.shuffleId, 0).map(_._1).toSet ===
+      HashSet(makeBlockManagerId("hostB"), makeBlockManagerId("hostD")))
+    assert(listener2.results.size === 1)
+
+    assert(taskSets(2).stageId === 2)
+    assert {
+      taskSets(2).tasks.forall(_.preferredResources ===
+        new PreferredResources(IMap("/fpga" -> ((1, Some("/gpu"))))))
+    }
+    complete(taskSets(2), Seq(
+      (Success, 52),
+      (Success, 53)))
+    assert(listener3.results === Map(0 -> 52, 1 -> 53))
+    assertDataStructuresEmpty()
   }
 
   /**

@@ -1059,21 +1059,24 @@ class DAGScheduler(
           partitionsToCompute.map { id =>
             val locs = taskIdToLocations(id)
             val part = partitions(id)
+            val preferredResources = stage.rdd.getPreferredResources(part)
             stage.pendingPartitions += id
             new ShuffleMapTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, properties, serializedTaskMetrics, Option(jobId),
-              Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier())
+              Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier(),
+              preferredResources)
           }
 
         case stage: ResultStage =>
           partitionsToCompute.map { id =>
             val p: Int = stage.partitions(id)
             val part = partitions(p)
+            val preferredResources = stage.rdd.getPreferredResources(part)
             val locs = taskIdToLocations(id)
             new ResultTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, id, properties, serializedTaskMetrics,
               Option(jobId), Option(sc.applicationId), sc.applicationAttemptId,
-              stage.rdd.isBarrier())
+              stage.rdd.isBarrier(), preferredResources)
           }
       }
     } catch {
