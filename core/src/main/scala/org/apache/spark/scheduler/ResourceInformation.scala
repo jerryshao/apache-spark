@@ -17,7 +17,12 @@
 
 package org.apache.spark.scheduler
 
+import org.json4s.DefaultFormats
+import org.json4s.JsonAST.{JArray, JValue}
+import org.json4s.jackson.JsonMethods._
+
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.util.JsonProtocol
 
 /**
  * :: DeveloperApi ::
@@ -51,12 +56,20 @@ private[spark] object ResourceInformation {
 
   val SUPPORTED_RESOURCES = Set("/gpu")
 
+  private implicit val format = DefaultFormats
+
   def occupyBy(taskId: Long, resources: Array[ResourceInformation]): Unit = {
     resources.foreach { r =>
       if (r.occupiedByTask == RESERVED) {
         r.occupiedByTask = taskId
       }
     }
+  }
+
+  def occupiedBy(
+      taskId: Long,
+      resources: Array[ResourceInformation]): Array[ResourceInformation] = {
+    resources.filter(_.occupiedByTask == taskId)
   }
 
   def clearBy(taskId: Long, resources: Array[ResourceInformation]): Unit = {
@@ -69,6 +82,20 @@ private[spark] object ResourceInformation {
 
   def availableResources(resources: Array[ResourceInformation]): Array[ResourceInformation] = {
     resources.filter(_.occupiedByTask == UNUSED)
+  }
+
+  def toJson(resources: Array[Array[ResourceInformation]]): String = {
+    val jvalue = JArray { resources.map {
+      r => JArray(r.map(JsonProtocol.resourceInformationToJson).toList) }.toList
+    }
+    compact(render(jvalue))
+  }
+
+  def fromJson(jsonString: String): Array[Array[ResourceInformation]] = {
+    parse(jsonString).extract[List[JValue]]
+      .map(_.extract[List[JValue]]
+        .map(JsonProtocol.resourceInformationFromJson).toArray)
+      .toArray
   }
 }
 

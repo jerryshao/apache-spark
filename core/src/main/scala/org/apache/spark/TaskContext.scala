@@ -20,7 +20,7 @@ package org.apache.spark
 import java.io.Serializable
 import java.util.Properties
 
-import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.annotation.{DeveloperApi, Experimental, Since}
 import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.metrics.source.Source
@@ -190,6 +190,13 @@ abstract class TaskContext extends Serializable {
    */
   @DeveloperApi
   def getMetricsSources(sourceName: String): Seq[Source]
+
+  /**
+   * :: Experimental ::
+   * Returns the all task infos in this stage, the task infos are ordered by partitionId.
+   */
+  @Experimental
+  def getResourcePreferredTaskInfos(): Array[ResourcePreferredTaskInfo]
 
   /**
    * If the task is interrupted, throws TaskKilledException with the reason for the interrupt.
