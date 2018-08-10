@@ -275,7 +275,8 @@ private[spark] class TaskSchedulerImpl(
       shuffledOffers: Seq[WorkerOffer],
       availableCpus: Array[Int],
       tasks: IndexedSeq[ArrayBuffer[TaskDescription]],
-      addressesWithDescs: ArrayBuffer[(String, TaskDescription)]) : Boolean = {
+      addressesWithDescs: ArrayBuffer[(String, TaskDescription, Array[ResourceInformation])])
+    : Boolean = {
     var launchedTask = false
     // nodes and executors that are blacklisted for the entire application have already been
     // filtered out by this point
@@ -294,11 +295,8 @@ private[spark] class TaskSchedulerImpl(
             availableCpus(i) -= CPUS_PER_TASK
             ResourceInformation.occupyBy(tid, resources)
             assert(availableCpus(i) >= 0)
-            // Only update hosts for a barrier task.
-            if (taskSet.isBarrier) {
-              // The executor address is expected to be non empty.
-              addressesWithDescs += (shuffledOffers(i).address.get -> task)
-            }
+            val resourcesForTask = ResourceInformation.occupiedBy(tid, resources)
+            addressesWithDescs += ((shuffledOffers(i).address.get, task, resourcesForTask))
             launchedTask = true
           }
         } catch {
@@ -379,7 +377,8 @@ private[spark] class TaskSchedulerImpl(
       } else {
         var launchedAnyTask = false
         // Record all the executor IDs assigned barrier tasks on.
-        val addressesWithDescs = ArrayBuffer[(String, TaskDescription)]()
+        val addressesWithDescs =
+          ArrayBuffer[(String, TaskDescription, Array[ResourceInformation])]()
         for (currentMaxLocality <- taskSet.myLocalityLevels) {
           var launchedTaskAtCurrentMaxLocality = false
           do {
@@ -391,6 +390,12 @@ private[spark] class TaskSchedulerImpl(
         if (!launchedAnyTask) {
           taskSet.abortIfCompletelyBlacklisted(hostToExecutors)
         }
+
+        val sortedAddressesWithDescs = addressesWithDescs.sortBy(_._2.partitionId)
+        val resources = sortedAddressesWithDescs.map(_._3)
+        val resourcesStr = ResourceInformation.toJson(resources.toArray)
+        addressesWithDescs.foreach(_._2.properties.setProperty("resources", resourcesStr))
+
         if (launchedAnyTask && taskSet.isBarrier) {
           // Check whether the barrier tasks are partially launched.
           // TODO SPARK-24818 handle the assert failure case (that can happen when some locality
@@ -402,9 +407,7 @@ private[spark] class TaskSchedulerImpl(
               "been blacklisted or cannot fulfill task locality requirements.")
 
           // Update the taskInfos into all the barrier task properties.
-          val addressesStr = addressesWithDescs
-            // Addresses ordered by partitionId
-            .sortBy(_._2.partitionId)
+          val addressesStr = sortedAddressesWithDescs
             .map(_._1)
             .mkString(",")
           addressesWithDescs.foreach(_._2.properties.setProperty("addresses", addressesStr))

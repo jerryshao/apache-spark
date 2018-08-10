@@ -27,6 +27,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.metrics.source.Source
+import org.apache.spark.scheduler.ResourceInformation
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.util._
 
@@ -96,6 +97,12 @@ private[spark] class TaskContextImpl(
       onFailureCallbacks += listener
     }
     this
+  }
+
+  override def getResourcePreferredTaskInfos(): Array[ResourcePreferredTaskInfo] = {
+    ResourceInformation.fromJson(localProperties.getProperty("resources")).map {
+      new ResourcePreferredTaskInfo(_)
+    }
   }
 
   /** Marks the task as failed and triggers the failure listeners. */
